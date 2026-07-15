@@ -87,6 +87,21 @@ class TodoQualityGateTest {
             .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
             .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
 
+        mvc.perform(put("/api/v1/todos").with(owner("owner-a"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"valid\"}"))
+            .andExpect(status().isMethodNotAllowed())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(header().string("Allow", containsString("GET")))
+            .andExpect(header().string("Allow", containsString("POST")))
+            .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
+
+        mvc.perform(post("/api/v1/todos").with(owner("owner-a"))
+                .contentType(MediaType.TEXT_PLAIN).content("{\"title\":\"valid\"}"))
+            .andExpect(status().isUnsupportedMediaType())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(header().string("Accept", containsString("application/json")))
+            .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"));
+
         mvc.perform(get("/api/v1/todos/not-a-uuid").with(owner("owner-a")))
             .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
         mvc.perform(get("/api/v1/todos?status=UNKNOWN").with(owner("owner-a")))

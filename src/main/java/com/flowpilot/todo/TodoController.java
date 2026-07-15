@@ -33,15 +33,17 @@ class TodoController {
     @GetMapping
     TodoPage list(@AuthenticationPrincipal Jwt jwt, @RequestParam(required=false) TodoStatus status,
                   @RequestParam(required=false) LocalDate dueFrom, @RequestParam(required=false) LocalDate dueTo,
-                  @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="20") int size) {
-        return TodoPage.of(service.list(jwt.getSubject(), status, dueFrom, dueTo, page, size));
+                  @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="20") int size,
+                  @RequestParam(defaultValue="createdAt,desc") String sort) {
+        return TodoPage.of(service.list(jwt.getSubject(), status, dueFrom, dueTo, page, size, sort));
     }
 
     @PatchMapping("/{id}")
     ResponseEntity<TodoResponse> patch(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
             @RequestHeader(value="If-Match", required=false) String match, @RequestBody JsonNode body) {
+        long expected = version(match);
         TodoPatch patch = TodoPatch.from(body);
-        Todo todo = service.patch(jwt.getSubject(), id, version(match), patch);
+        Todo todo = service.patch(jwt.getSubject(), id, expected, patch);
         return ResponseEntity.ok().eTag(etag(todo.version)).body(TodoResponse.of(todo));
     }
 
@@ -55,7 +57,11 @@ class TodoController {
     private static long version(String value) {
         if (value == null) throw new PreconditionRequired();
         if (!value.matches("\"[0-9]+\"")) throw new BadRequest("If-Match must be a quoted version");
-        return Long.parseLong(value.substring(1, value.length()-1));
+        try {
+            return Long.parseLong(value.substring(1, value.length()-1));
+        } catch (NumberFormatException e) {
+            throw new BadRequest("If-Match version is out of range");
+        }
     }
     private static String etag(long version) { return "\"" + version + "\""; }
 }
@@ -64,16 +70,42 @@ record TodoCreate(@NotBlank @Size(max=200) String title, @Size(max=5000) String 
                   TodoStatus status, LocalDate dueDate) {}
 record TodoPatch(String title, boolean descriptionPresent, String description, TodoStatus status,
                  boolean dueDatePresent, LocalDate dueDate) {
+    private static final Set<String> FIELDS = Set.of("title", "description", "status", "dueDate");
+
     static TodoPatch from(JsonNode node) {
-        String title = text(node, "title");
-        if (node.has("title") && (title == null || title.isBlank() || title.length() > 200)) throw new BadRequest("title is invalid");
-        String description = text(node, "description");
+        if (node == null || !node.isObject() || node.isEmpty()) throw new BadRequest("patch must be a non-empty object");
+        node.fieldNames().forEachRemaining(field -> {
+            if (!FIELDS.contains(field)) throw new BadRequest("unknown patch field");
+        });
+
+        String title = null;
+        if (node.has("title")) {
+            if (!node.get("title").isTextual()) throw new BadRequest("title must be a string");
+            title = node.get("title").textValue();
+            if (title.trim().isEmpty() || title.trim().length() > 200) throw new BadRequest("title is invalid");
+        }
+
+        String description = null;
+        if (node.has("description")) {
+            if (!node.get("description").isNull() && !node.get("description").isTextual())
+                throw new BadRequest("description must be a string or null");
+            description = node.get("description").isNull() ? null : node.get("description").textValue();
+        }
         if (description != null && description.length() > 5000) throw new BadRequest("description is too long");
-        TodoStatus status = node.hasNonNull("status") ? parseStatus(node.get("status").asText()) : null;
-        LocalDate due = node.hasNonNull("dueDate") ? parseDate(node.get("dueDate").asText()) : null;
+
+        TodoStatus status = null;
+        if (node.has("status")) {
+            if (!node.get("status").isTextual()) throw new BadRequest("status must be a string");
+            status = parseStatus(node.get("status").textValue());
+        }
+
+        LocalDate due = null;
+        if (node.has("dueDate") && !node.get("dueDate").isNull()) {
+            if (!node.get("dueDate").isTextual()) throw new BadRequest("dueDate must be a string or null");
+            due = parseDate(node.get("dueDate").textValue());
+        }
         return new TodoPatch(title, node.has("description"), description, status, node.has("dueDate"), due);
     }
-    private static String text(JsonNode n, String f) { return n.hasNonNull(f) && n.get(f).isTextual() ? n.get(f).asText() : null; }
     private static TodoStatus parseStatus(String v) { try { return TodoStatus.valueOf(v); } catch (Exception e) { throw new BadRequest("status is invalid"); } }
     private static LocalDate parseDate(String v) { try { return LocalDate.parse(v); } catch (Exception e) { throw new BadRequest("dueDate is invalid"); } }
 }

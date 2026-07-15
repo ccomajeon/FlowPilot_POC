@@ -3,6 +3,7 @@ package com.flowpilot.todo;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -11,50 +12,101 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Testcontainers(disabledWithoutDocker = true)
+@Testcontainers
 class TodoApiIntegrationTest {
     @Container static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
     @DynamicPropertySource static void database(DynamicPropertyRegistry r) {
         r.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         r.add("spring.datasource.username", POSTGRES::getUsername);
         r.add("spring.datasource.password", POSTGRES::getPassword);
+        r.add("spring.flyway.url", POSTGRES::getJdbcUrl);
+        r.add("spring.flyway.user", POSTGRES::getUsername);
+        r.add("spring.flyway.password", POSTGRES::getPassword);
         r.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", () -> "https://issuer.invalid");
         r.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri", () -> "https://issuer.invalid/jwks");
+        r.add("todo.security.audience", () -> "todo-api");
     }
     @Autowired MockMvc mvc;
     @Autowired TodoRepository repository;
     @BeforeEach void clean() { repository.deleteAll(); }
 
     @Test void crudOwnershipAndConcurrency() throws Exception {
-        String body = mvc.perform(post("/api/v1/todos").with(jwt().jwt(j -> j.subject("alice")))
+        String body = mvc.perform(post("/api/v1/todos").with(user("alice"))
                 .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\" task \",\"dueDate\":\"2026-07-31\"}"))
             .andExpect(status().isCreated()).andExpect(header().string("ETag", "\"0\""))
             .andExpect(jsonPath("$.title").value("task")).andReturn().getResponse().getContentAsString();
         String id = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body).get("id").asText();
 
-        mvc.perform(get("/api/v1/todos/{id}", id).with(jwt().jwt(j -> j.subject("bob"))))
+        mvc.perform(get("/api/v1/todos/{id}", id).with(user("bob")))
             .andExpect(status().isNotFound());
-        mvc.perform(patch("/api/v1/todos/{id}", id).with(jwt().jwt(j -> j.subject("alice")))
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("alice"))
                 .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"DONE\",\"dueDate\":null}"))
             .andExpect(status().isOk()).andExpect(header().string("ETag", "\"1\""))
             .andExpect(jsonPath("$.status").value("DONE")).andExpect(jsonPath("$.dueDate").doesNotExist());
-        mvc.perform(patch("/api/v1/todos/{id}", id).with(jwt().jwt(j -> j.subject("alice")))
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("alice"))
                 .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"stale\"}"))
             .andExpect(status().isConflict());
-        mvc.perform(delete("/api/v1/todos/{id}", id).with(jwt().jwt(j -> j.subject("alice"))).header("If-Match", "\"1\""))
+        mvc.perform(delete("/api/v1/todos/{id}", id).with(user("alice")).header("If-Match", "\"1\""))
             .andExpect(status().isNoContent());
-        mvc.perform(get("/api/v1/todos/{id}", id).with(jwt().jwt(j -> j.subject("alice"))))
+        mvc.perform(get("/api/v1/todos/{id}", id).with(user("alice")))
             .andExpect(status().isNotFound());
     }
 
     @Test void validatesAuthenticationAndInput() throws Exception {
         mvc.perform(get("/api/v1/todos")).andExpect(status().isUnauthorized());
-        mvc.perform(post("/api/v1/todos").with(jwt()).contentType(MediaType.APPLICATION_JSON).content("{\"title\":\" \"}"))
+        mvc.perform(get("/api/v1/todos").with(jwt())).andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/todos").with(user("alice")).contentType(MediaType.APPLICATION_JSON).content("{\"title\":\" \"}"))
             .andExpect(status().isBadRequest());
+    }
+
+    @Test void rejectsUnsafePatchAndEtagInputs() throws Exception {
+        String body = mvc.perform(post("/api/v1/todos").with(user("alice"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"task\"}"))
+            .andReturn().getResponse().getContentAsString();
+        String id = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body).get("id").asText();
+
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("alice"))
+                .contentType(MediaType.APPLICATION_JSON).content("{}"))
+            .andExpect(status().isPreconditionRequired());
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("alice"))
+                .header("If-Match", "\"999999999999999999999999999999\"")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"x\"}"))
+            .andExpect(status().isBadRequest());
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("alice"))
+                .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"description\":123}"))
+            .andExpect(status().isBadRequest());
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("alice"))
+                .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":null}"))
+            .andExpect(status().isBadRequest());
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("alice"))
+                .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"unknown\":true}"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test void hidesOwnedResourceForPatchAndDelete() throws Exception {
+        String body = mvc.perform(post("/api/v1/todos").with(user("alice"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"private\"}"))
+            .andReturn().getResponse().getContentAsString();
+        String id = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body).get("id").asText();
+
+        mvc.perform(patch("/api/v1/todos/{id}", id).with(user("bob")).header("If-Match", "\"0\"")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"stolen\"}"))
+            .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/v1/todos/{id}", id).with(user("bob")).header("If-Match", "\"0\""))
+            .andExpect(status().isNotFound());
+    }
+
+    private static RequestPostProcessor user(String subject) {
+        return jwt().jwt(j -> j.subject(subject))
+            .authorities(new SimpleGrantedAuthority("SCOPE_todos"));
     }
 }

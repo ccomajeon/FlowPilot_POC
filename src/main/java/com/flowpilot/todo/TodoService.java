@@ -1,7 +1,7 @@
 package com.flowpilot.todo;
 
 import java.time.LocalDate;
-import java.util.UUID;
+import java.util.*;
 import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,11 +20,21 @@ class TodoService {
     Todo get(String owner, UUID id) { return owned(owner, id); }
 
     @Transactional(readOnly=true)
-    Page<Todo> list(String owner, TodoStatus status, LocalDate from, LocalDate to, int page, int size) {
+    Page<Todo> list(String owner, TodoStatus status, LocalDate from, LocalDate to, int page, int size,
+            String sortValue) {
         if (from != null && to != null && from.isAfter(to)) throw new BadRequest("dueFrom must not be after dueTo");
         if (page < 0 || size < 1 || size > 100) throw new BadRequest("page/size is invalid");
-        return repository.owned(owner, status, from, to,
-            PageRequest.of(page, size, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))));
+        String[] parts = sortValue.split(",", -1);
+        if (parts.length != 2 || !Set.of("createdAt", "updatedAt", "dueDate", "status").contains(parts[0]))
+            throw new BadRequest("sort field is invalid");
+        Sort.Direction direction;
+        try {
+            direction = Sort.Direction.fromString(parts[1]);
+        } catch (IllegalArgumentException e) {
+            throw new BadRequest("sort direction is invalid");
+        }
+        Sort sort = Sort.by(direction, parts[0]).and(Sort.by(direction, "id"));
+        return repository.owned(owner, status, from, to, PageRequest.of(page, size, sort));
     }
 
     @Transactional

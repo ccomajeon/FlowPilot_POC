@@ -3,6 +3,10 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/todos}
     username: ${DB_USERNAME:todo_app}
     password: ${DB_PASSWORD:}
+  flyway:
+    url: ${FLYWAY_DB_URL}
+    user: ${FLYWAY_DB_USERNAME}
+    password: ${FLYWAY_DB_PASSWORD}
   jpa:
     open-in-view: false
     hibernate:
@@ -12,6 +16,10 @@ spring:
       resourceserver:
         jwt:
           issuer-uri: ${JWT_ISSUER_URI}
+          jwk-set-uri: ${JWT_JWK_SET_URI}
+todo:
+  security:
+    audience: ${JWT_AUDIENCE}
 server:
   error:
     include-message: never
@@ -24,3 +32,17 @@ management:
     health:
       probes:
         enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState,ping
+  health:
+    db:
+      enabled: true
+logging:
+  structured:
+    format:
+      console: logstash
+  level:
+    org.springframework.web: INFO

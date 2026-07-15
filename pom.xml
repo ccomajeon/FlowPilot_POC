@@ -2,7 +2,7 @@
   <modelVersion>4.0.0</modelVersion>
   <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>3.5.3</version><relativePath/></parent>
   <groupId>com.flowpilot</groupId><artifactId>todo-api</artifactId><version>0.0.1-SNAPSHOT</version>
-  <properties><java.version>21</java.version><testcontainers.version>1.21.3</testcontainers.version></properties>
+  <properties><java.version>21</java.version><maven.version>3.9.9</maven.version><testcontainers.version>1.21.3</testcontainers.version></properties>
   <dependencies>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
@@ -18,5 +18,5 @@
     <dependency><groupId>org.testcontainers</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
   </dependencies>
   <dependencyManagement><dependencies><dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers-bom</artifactId><version>${testcontainers.version}</version><type>pom</type><scope>import</scope></dependency></dependencies></dependencyManagement>
-  <build><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><configuration><failIfNoTests>true</failIfNoTests></configuration></plugin></plugins></build>
+  <build><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-enforcer-plugin</artifactId><version>3.5.0</version><executions><execution><id>enforce-build-toolchain</id><goals><goal>enforce</goal></goals><configuration><rules><requireMavenVersion><version>[${maven.version},3.9.10)</version></requireMavenVersion><requireJavaVersion><version>[21,22)</version></requireJavaVersion></rules></configuration></execution></executions></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><configuration><failIfNoTests>true</failIfNoTests></configuration></plugin></plugins></build>
 </project>

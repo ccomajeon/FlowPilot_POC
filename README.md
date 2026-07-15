@@ -57,6 +57,8 @@ JWT_ISSUER_URI=https://approved-idp.example/issuer
 JWT_JWK_SET_URI=https://approved-idp.example/issuer/jwks
 JWT_AUDIENCE=todo-api
 TODO_CORS_ALLOWED_ORIGINS=https://approved-ui.example
+DB_CONNECTION_TIMEOUT_MS=3000
+DB_VALIDATION_TIMEOUT_MS=1000
 ```
 
 ```bash
@@ -67,7 +69,7 @@ mvn spring-boot:run
 
 ## 테스트
 
-Java 21과 실행 가능한 Docker가 필수입니다.
+Java 21, Maven 3.9.9와 실행 가능한 Docker가 필수입니다. 다른 Maven 또는 Java 버전은 빌드 시작 시 거부됩니다.
 
 ```bash
 mvn test -Dtest.postgres.image="postgres:16.9-alpine@sha256:<승인된-digest>"

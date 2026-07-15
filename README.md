@@ -70,10 +70,10 @@ mvn spring-boot:run
 Java 21과 실행 가능한 Docker가 필수입니다.
 
 ```bash
-mvn test -Dtest.postgres.image="$TEST_POSTGRES_IMAGE"
+mvn test -Dtest.postgres.image="postgres:16.9-alpine@sha256:<승인된-digest>"
 ```
 
-로컬에서 `test.postgres.image`를 생략하면 모든 테스트가 `postgres:16.9-alpine`을 사용합니다. 재현 가능한 배포 승인 CI에서는 `TEST_POSTGRES_IMAGE`를 `postgres:16.9-alpine@sha256:<승인된-digest>` 형식으로 설정해야 하며, 부동 태그나 서로 다른 PostgreSQL 메이저 버전을 사용해서는 안 됩니다. 운영 PostgreSQL 버전이 확정되면 테스트 이미지도 같은 메이저·마이너 버전으로 변경하고 검증합니다.
+`test.postgres.image`는 필수이며 `postgres:16.9-alpine@sha256:<64자리 승인 digest>` 형식만 허용됩니다. 속성을 생략하거나 부동 태그, 다른 PostgreSQL 버전 또는 digest 없는 이미지를 지정하면 테스트는 컨테이너 시작 전에 실패합니다. 운영 PostgreSQL 버전이 확정되면 허용 버전과 테스트 이미지를 같은 메이저·마이너 버전으로 함께 변경하고 검증합니다.
 
 Testcontainers가 PostgreSQL을 시작하지 못하면 통합 테스트를 건너뛰지 않고 빌드를 실패시킵니다. CI는 동일 Git 커밋에서 최소한 다음을 보존해야 합니다.
 

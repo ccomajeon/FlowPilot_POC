@@ -3,8 +3,13 @@ package com.flowpilot.todo;
 import jakarta.persistence.OptimisticLockException;
 import java.net.URI;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.http.*;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
@@ -14,6 +19,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 @RestControllerAdvice
 class ApiExceptionHandler {
+    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
     @ExceptionHandler(TodoNotFound.class)
     ProblemDetail notFound() { return problem(HttpStatus.NOT_FOUND, "TODO_NOT_FOUND", "할 일을 찾을 수 없습니다."); }
 
@@ -33,6 +40,21 @@ class ApiExceptionHandler {
             .map(this::validationError).toList();
         p.setProperty("errors", errors);
         return p;
+    }
+
+    @ExceptionHandler({DataAccessResourceFailureException.class, TransientDataAccessResourceException.class,
+        QueryTimeoutException.class})
+    ProblemDetail databaseUnavailable(Exception exception) {
+        log.error("Database request failed; correlationId={}, exceptionType={}",
+            MDC.get(CorrelationIdFilter.MDC_KEY), exception.getClass().getName());
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "DATABASE_UNAVAILABLE", "서비스를 일시적으로 사용할 수 없습니다.");
+    }
+
+    @ExceptionHandler(Exception.class)
+    ProblemDetail unexpected(Exception exception) {
+        log.error("Unhandled request failure; correlationId={}, exceptionType={}",
+            MDC.get(CorrelationIdFilter.MDC_KEY), exception.getClass().getName());
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "요청을 처리하지 못했습니다.");
     }
 
     private ValidationError validationError(FieldError error) {

@@ -6,9 +6,32 @@ import org.springframework.data.domain.*;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
-interface TodoRepository extends JpaRepository<Todo, UUID>, JpaSpecificationExecutor<Todo> {
+interface OwnedTodoRepository {
     Optional<Todo> findByIdAndOwnerId(UUID id, String ownerId);
+    Page<Todo> owned(String owner, TodoStatus status, LocalDate from, LocalDate to, Pageable page);
+    Todo saveNew(Todo todo);
+    Todo saveOwned(Todo todo);
+    void deleteOwned(Todo todo);
+}
 
+interface TodoRepository extends JpaRepository<Todo, UUID>, JpaSpecificationExecutor<Todo>, OwnedTodoRepository {
+    @Override
+    default Todo saveNew(Todo todo) {
+        return save(todo);
+    }
+
+    @Override
+    default Todo saveOwned(Todo todo) {
+        return saveAndFlush(todo);
+    }
+
+    @Override
+    default void deleteOwned(Todo todo) {
+        delete(todo);
+        flush();
+    }
+
+    @Override
     default Page<Todo> owned(String owner, TodoStatus status, LocalDate from, LocalDate to, Pageable page) {
         return findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();

@@ -8,12 +8,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 class TodoService {
-    private final TodoRepository repository;
-    TodoService(TodoRepository repository) { this.repository = repository; }
+    private final OwnedTodoRepository repository;
+    TodoService(OwnedTodoRepository repository) { this.repository = repository; }
 
     @Transactional
     Todo create(String owner, TodoCreate request) {
-        return repository.save(new Todo(owner, request.title(), request.description(), request.status(), request.dueDate()));
+        return repository.saveNew(new Todo(owner, request.title(), request.description(), request.status(), request.dueDate()));
     }
 
     @Transactional(readOnly=true)
@@ -42,15 +42,14 @@ class TodoService {
         Todo todo = owned(owner, id);
         if (todo.version != expected) throw new VersionConflict();
         todo.patch(patch);
-        return repository.saveAndFlush(todo);
+        return repository.saveOwned(todo);
     }
 
     @Transactional
     void delete(String owner, UUID id, long expected) {
         Todo todo = owned(owner, id);
         if (todo.version != expected) throw new VersionConflict();
-        repository.delete(todo);
-        repository.flush();
+        repository.deleteOwned(todo);
     }
 
     private Todo owned(String owner, UUID id) {

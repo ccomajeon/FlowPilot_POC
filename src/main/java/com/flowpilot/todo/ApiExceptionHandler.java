@@ -16,6 +16,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 @RestControllerAdvice
 class ApiExceptionHandler {
@@ -43,7 +44,7 @@ class ApiExceptionHandler {
     }
 
     @ExceptionHandler({DataAccessResourceFailureException.class, TransientDataAccessResourceException.class,
-        QueryTimeoutException.class})
+        QueryTimeoutException.class, CannotCreateTransactionException.class})
     ProblemDetail databaseUnavailable(Exception exception) {
         log.error("Database request failed; correlationId={}, exceptionType={}",
             MDC.get(CorrelationIdFilter.MDC_KEY), exception.getClass().getName());

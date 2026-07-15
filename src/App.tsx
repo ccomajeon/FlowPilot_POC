@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { api, Session, Todo, TodoInput, userMessage } from "./api";
+import { api, ApiError, onAuthExpired, Session, Todo, TodoInput, userMessage } from "./api";
 
 type Filter = "ALL" | "OPEN" | "DONE";
 
@@ -12,7 +12,7 @@ function readFilters(): { status: Filter; query: string } {
   };
 }
 
-function LoginPage({ error }: { error?: string }) {
+function LoginPage({ error, onRetryLogout }: { error?: string; onRetryLogout?: () => void }) {
   return (
     <main className="login-shell">
       <section className="login-card" aria-labelledby="login-title">
@@ -22,6 +22,7 @@ function LoginPage({ error }: { error?: string }) {
         <p className="muted">안전한 OAuth 로그인으로 어디서든 나만의 할 일에 접근할 수 있습니다.</p>
         {error && <p className="alert error" role="alert">{error}</p>}
         <button className="primary wide" onClick={() => api.login()}>OAuth로 계속하기</button>
+        {onRetryLogout && <button className="ghost wide" onClick={onRetryLogout}>서버 로그아웃 다시 시도</button>}
         <p className="legal">계속하면 서비스 이용약관과 개인정보처리방침에 동의하게 됩니다.</p>
       </section>
     </main>
@@ -165,8 +166,17 @@ export function App() {
   const [listError, setListError] = useState("");
   const [notice, setNotice] = useState("");
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [serverLogoutPending, setServerLogoutPending] = useState(false);
   const [dark, setDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
   const requestNumber = useRef(0);
+
+  useEffect(() => onAuthExpired(() => {
+    requestNumber.current += 1;
+    setTodos([]);
+    setBusyIds(new Set());
+    setSessionError("로그인이 만료되었습니다. 다시 로그인해 주세요.");
+    setSession({ authenticated: false, user: null });
+  }), []);
 
   useEffect(() => {
     api.session().then(setSession).catch((error) => {
@@ -180,8 +190,17 @@ export function App() {
     setLoading(true);
     setListError("");
     try {
-      const page = await api.todos({ status, query: query.trim() }, signal);
-      if (current === requestNumber.current) setTodos(page.items);
+      const merged = new Map<string, Todo>();
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await api.todos({ status, query: query.trim() }, signal, cursor);
+        page.items.forEach((todo) => merged.set(todo.id, todo));
+        cursor = page.nextCursor ?? undefined;
+        if (cursor && cursors.has(cursor)) throw new ApiError(0, "페이지 응답이 올바르지 않습니다.", "INVALID_CURSOR");
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
+      if (current === requestNumber.current) setTodos([...merged.values()]);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError") && current === requestNumber.current) {
         setListError(userMessage(error));
@@ -213,11 +232,17 @@ export function App() {
     });
   }
 
+  function matchesFilters(todo: Todo): boolean {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    return (status === "ALL" || todo.status === status)
+      && (!normalizedQuery || todo.title.toLocaleLowerCase().includes(normalizedQuery));
+  }
+
   async function createTodo(input: TodoInput) {
     try {
       const created = await api.create(input);
-      setTodos((current) => [created, ...current]);
-      setNotice("할 일을 추가했습니다.");
+      if (matchesFilters(created)) setTodos((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      setNotice(matchesFilters(created) ? "할 일을 추가했습니다." : "할 일을 추가했지만 현재 필터에는 표시되지 않습니다.");
     } catch (error) {
       setNotice(userMessage(error));
       throw error;
@@ -228,7 +253,9 @@ export function App() {
     markBusy(todo.id, true);
     try {
       const updated = await api.update(todo, input);
-      setTodos((current) => current.map((item) => item.id === todo.id ? updated : item));
+      setTodos((current) => matchesFilters(updated)
+        ? current.map((item) => item.id === todo.id ? updated : item)
+        : current.filter((item) => item.id !== todo.id));
       setNotice("변경사항을 저장했습니다.");
     } catch (error) {
       setNotice(userMessage(error));
@@ -254,15 +281,31 @@ export function App() {
   }
 
   async function logout() {
+    setTodos([]);
+    setBusyIds(new Set());
+    setSessionError("");
+    setServerLogoutPending(false);
+    setSession({ authenticated: false, user: null });
     try {
       await api.logout();
-    } finally {
-      setSession({ authenticated: false, user: null });
+    } catch (error) {
+      setSessionError("로컬 데이터는 제거했지만 서버 세션을 종료하지 못했습니다. " + userMessage(error));
+      setServerLogoutPending(true);
+    }
+  }
+
+  async function retryLogout() {
+    try {
+      await api.retryLogout();
+      setServerLogoutPending(false);
+      setSessionError("");
+    } catch (error) {
+      setSessionError("서버 세션을 종료하지 못했습니다. " + userMessage(error));
     }
   }
 
   if (!session) return <main className="center" aria-busy="true"><div className="spinner" /><p>세션을 확인하고 있습니다.</p></main>;
-  if (!session.authenticated) return <LoginPage error={sessionError} />;
+  if (!session.authenticated) return <LoginPage error={sessionError} onRetryLogout={serverLogoutPending ? () => void retryLogout() : undefined} />;
 
   return (
     <div className={dark ? "app dark" : "app"}>

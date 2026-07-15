@@ -21,7 +21,10 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.history.replaceState(null, "", "/");
+});
 
 describe("App", () => {
   it("미인증 사용자를 로그인 화면으로 보호한다", async () => {
@@ -52,7 +55,7 @@ describe("App", () => {
 
   it("생성 실패 후 입력을 유지하고 안전한 오류를 알린다", async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" } }))
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
       .mockResolvedValueOnce(json({ items: [] }))
       .mockResolvedValueOnce(json({ message: "internal stack", traceId: "trace-safe" }, 500));
     vi.stubGlobal("fetch", fetchMock);
@@ -65,5 +68,44 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("서비스가 일시적으로 불안정합니다."));
     expect(input).toHaveValue("보존할 입력");
     expect(screen.queryByText("internal stack")).not.toBeInTheDocument();
+  });
+
+  it("OPEN 항목을 완료하면 현재 목록에서 제거한다", async () => {
+    window.history.replaceState(null, "", "/todos?status=OPEN");
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo] }))
+      .mockResolvedValueOnce(json({ ...openTodo, status: "DONE", version: 2 })));
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "계약 검토 완료로 변경" }));
+    await waitFor(() => expect(screen.queryByText("계약 검토")).not.toBeInTheDocument());
+  });
+
+  it("커서 페이지를 중복 없이 모두 병합한다", async () => {
+    const secondTodo = { ...openTodo, id: "todo-2", title: "배포 확인" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo], nextCursor: "page-2" }))
+      .mockResolvedValueOnce(json({ items: [openTodo, secondTodo], nextCursor: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    expect(await screen.findByText("계약 검토")).toBeInTheDocument();
+    expect(await screen.findByText("배포 확인")).toBeInTheDocument();
+    expect(screen.getByText("2개")).toBeInTheDocument();
+    expect(String(fetchMock.mock.calls[2][0])).toContain("cursor=page-2");
+  });
+
+  it("로그아웃 실패 시 보호 데이터를 제거하고 재시도 경로를 제공한다", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo] }))
+      .mockRejectedValueOnce(new TypeError("network")));
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "로그아웃" }));
+    expect(await screen.findByRole("button", { name: "서버 로그아웃 다시 시도" })).toBeInTheDocument();
+    expect(screen.queryByText("계약 검토")).not.toBeInTheDocument();
   });
 });

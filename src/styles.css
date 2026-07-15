@@ -16,8 +16,8 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: #f5f7fb; }
-button, input, textarea { font: inherit; }
-button, a, input, textarea { outline-offset: 3px; }
+button, input, textarea, select { font: inherit; }
+button, a, input, textarea, select { outline-offset: 3px; }
 button { cursor: pointer; }
 button:disabled { cursor: wait; opacity: .58; }
 .app { min-height: 100vh; color: var(--text); background: #f5f7fb; transition: background .2s, color .2s; }
@@ -49,8 +49,8 @@ button:disabled { cursor: wait; opacity: .58; }
 .field { display: grid; gap: 7px; }
 .field.grow { flex: 1; }
 .field label { font-size: .8rem; font-weight: 700; color: var(--muted); }
-input, textarea { width: 100%; color: var(--text); background: var(--surface-soft); border: 1px solid transparent; border-radius: 11px; padding: 11px 13px; }
-input:focus, textarea:focus { border-color: var(--brand); }
+input, textarea, select { width: 100%; color: var(--text); background: var(--surface-soft); border: 1px solid transparent; border-radius: 11px; padding: 11px 13px; }
+input:focus, textarea:focus, select:focus { border-color: var(--brand); }
 .quick-add input { background: transparent; font-size: 1.03rem; padding: 10px; }
 .primary, .ghost, .icon-button, .segments button { min-height: 44px; border: 0; border-radius: 11px; padding: 0 16px; font-weight: 700; }
 .primary { color: white; background: var(--brand); }
@@ -67,6 +67,10 @@ input:focus, textarea:focus { border-color: var(--brand); }
 .segments { display: flex; gap: 4px; padding: 4px; background: var(--surface-soft); border-radius: 13px; }
 .segments button { min-height: 36px; color: var(--muted); background: transparent; padding: 0 13px; }
 .segments button.active { color: var(--text); background: var(--surface); box-shadow: 0 2px 8px rgba(0, 0, 0, .08); }
+.filter-selects { display: flex; gap: 8px; }
+.filter-selects label { min-width: 132px; color: var(--muted); font-size: .75rem; font-weight: 700; }
+.filter-selects label span { display: block; margin: 0 0 4px 2px; }
+.filter-selects select { min-height: 44px; background-color: var(--surface); border-color: var(--line); }
 .list-heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
 .list-heading h2 { font-size: 1rem; }
 .list-heading span { color: var(--muted); font-size: .85rem; }
@@ -91,6 +95,7 @@ input:focus, textarea:focus { border-color: var(--brand); }
 .empty h2 { color: var(--text); font-size: 1.1rem; }
 .skeletons { display: grid; gap: 10px; }
 .skeletons div { height: 76px; border-radius: 15px; background: linear-gradient(90deg, var(--surface) 25%, var(--surface-soft) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+.load-more { display: block; min-width: 140px; margin: 20px auto 0; }
 .center, .login-shell { min-height: 100vh; display: grid; place-content: center; text-align: center; }
 .spinner { width: 34px; height: 34px; margin: auto; border: 3px solid #dfe3ec; border-top-color: var(--brand); border-radius: 50%; animation: spin .8s linear infinite; }
 .login-shell { padding: 24px; background: radial-gradient(circle at 20% 10%, #e9e6ff, transparent 34%), #f5f7fb; }
@@ -107,6 +112,8 @@ input:focus, textarea:focus { border-color: var(--brand); }
   .content { padding-top: 36px; }
   .toolbar { align-items: stretch; flex-direction: column; }
   .search { max-width: none; }
+  .filter-selects { display: grid; grid-template-columns: 1fr 1fr; }
+  .filter-selects label { min-width: 0; }
   .segments button { flex: 1; }
   .todo-card { align-items: flex-start; flex-wrap: wrap; }
   .todo-copy { padding-top: 10px; }

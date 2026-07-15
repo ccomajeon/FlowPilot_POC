@@ -1,14 +1,19 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, onAuthExpired, Session, Todo, TodoInput, userMessage } from "./api";
+import { api, ApiError, DueFilter, onAuthExpired, Session, Todo, TodoInput, TodoSort, userMessage } from "./api";
 
 type Filter = "ALL" | "OPEN" | "DONE";
+type QueryFilters = { status: Filter; query: string; due: DueFilter; sort: TodoSort };
 
-function readFilters(): { status: Filter; query: string } {
+function readFilters(): QueryFilters {
   const params = new URLSearchParams(window.location.search);
-  const value = params.get("status");
+  const statusValue = params.get("status");
+  const dueValue = params.get("due");
+  const sortValue = params.get("sort");
   return {
-    status: value === "OPEN" || value === "DONE" ? value : "ALL",
-    query: params.get("q")?.slice(0, 100) ?? ""
+    status: statusValue === "OPEN" || statusValue === "DONE" ? statusValue : "ALL",
+    query: params.get("q")?.trim().slice(0, 100) ?? "",
+    due: dueValue === "TODAY" || dueValue === "OVERDUE" || dueValue === "UPCOMING" ? dueValue : "ALL",
+    sort: sortValue === "createdAt:desc" ? sortValue : "updatedAt:desc"
   };
 }
 
@@ -162,13 +167,20 @@ export function App() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [status, setStatus] = useState<Filter>(initial.status);
   const [query, setQuery] = useState(initial.query);
+  const [due, setDue] = useState<DueFilter>(initial.due);
+  const [sort, setSort] = useState<TodoSort>(initial.sort);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string>();
   const [listError, setListError] = useState("");
   const [notice, setNotice] = useState("");
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [serverLogoutPending, setServerLogoutPending] = useState(false);
   const [dark, setDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
   const requestNumber = useRef(0);
+  const seenCursors = useRef(new Set<string>());
+  const pageCount = useRef(0);
+  const itemCount = useRef(0);
 
   useEffect(() => onAuthExpired(() => {
     requestNumber.current += 1;
@@ -185,30 +197,51 @@ export function App() {
     });
   }, []);
 
-  const loadTodos = useCallback(async (signal?: AbortSignal) => {
+  const loadTodos = useCallback(async (signal?: AbortSignal, cursor?: string, append = false) => {
     const current = ++requestNumber.current;
-    setLoading(true);
+    append ? setLoadingMore(true) : setLoading(true);
     setListError("");
     try {
-      const merged = new Map<string, Todo>();
-      const cursors = new Set<string>();
-      let cursor: string | undefined;
-      do {
-        const page = await api.todos({ status, query: query.trim() }, signal, cursor);
-        page.items.forEach((todo) => merged.set(todo.id, todo));
-        cursor = page.nextCursor ?? undefined;
-        if (cursor && cursors.has(cursor)) throw new ApiError(0, "페이지 응답이 올바르지 않습니다.", "INVALID_CURSOR");
-        if (cursor) cursors.add(cursor);
-      } while (cursor);
-      if (current === requestNumber.current) setTodos([...merged.values()]);
+      const page = await api.todos(
+        { status, query: query.trim(), due, sort },
+        signal,
+        cursor,
+        ({ attempt }) => setNotice(`목록 조회를 다시 시도하고 있습니다. ${attempt}/2`)
+      );
+      if (current !== requestNumber.current) return;
+      if (!append) {
+        seenCursors.current.clear();
+        pageCount.current = 0;
+        itemCount.current = 0;
+      }
+      if (cursor) seenCursors.current.add(cursor);
+      const followingCursor = page.nextCursor ?? undefined;
+      if (followingCursor && seenCursors.current.has(followingCursor)) {
+        throw new ApiError(0, "페이지 응답이 올바르지 않습니다.", "INVALID_CURSOR");
+      }
+      const remaining = Math.max(0, 500 - itemCount.current);
+      const incoming = page.items.slice(0, remaining);
+      itemCount.current += incoming.length;
+      pageCount.current += 1;
+      setTodos((currentTodos) => {
+        const merged = new Map((append ? currentTodos : []).map((todo) => [todo.id, todo]));
+        incoming.forEach((todo) => merged.set(todo.id, todo));
+        return [...merged.values()];
+      });
+      const limited = pageCount.current >= 20 || itemCount.current >= 500;
+      setNextCursor(limited ? undefined : followingCursor);
+      if (limited && followingCursor) setListError("표시 가능한 목록 한도에 도달했습니다. 필터를 좁혀 주세요.");
+      else setNotice("");
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError") && current === requestNumber.current) {
         setListError(userMessage(error));
       }
     } finally {
-      if (current === requestNumber.current) setLoading(false);
+      if (current === requestNumber.current) {
+        append ? setLoadingMore(false) : setLoading(false);
+      }
     }
-  }, [query, status]);
+  }, [due, query, sort, status]);
 
   useEffect(() => {
     if (!session?.authenticated) return;
@@ -217,12 +250,14 @@ export function App() {
     const params = new URLSearchParams();
     if (status !== "ALL") params.set("status", status);
     if (query.trim()) params.set("q", query.trim());
+    if (due !== "ALL") params.set("due", due);
+    if (sort !== "updatedAt:desc") params.set("sort", sort);
     window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [loadTodos, query, session?.authenticated, status]);
+  }, [due, loadTodos, query, session?.authenticated, sort, status]);
 
   function markBusy(id: string, busy: boolean) {
     setBusyIds((current) => {
@@ -234,8 +269,9 @@ export function App() {
 
   function matchesFilters(todo: Todo): boolean {
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    return (status === "ALL" || todo.status === status)
+    const baseMatch = (status === "ALL" || todo.status === status)
       && (!normalizedQuery || todo.title.toLocaleLowerCase().includes(normalizedQuery));
+    return baseMatch && due === "ALL";
   }
 
   async function createTodo(input: TodoInput) {
@@ -340,6 +376,24 @@ export function App() {
               </button>
             ))}
           </div>
+          <div className="filter-selects">
+            <label>
+              <span>기한</span>
+              <select aria-label="기한 필터" value={due} onChange={(event) => setDue(event.target.value as DueFilter)}>
+                <option value="ALL">모든 기한</option>
+                <option value="TODAY">오늘</option>
+                <option value="OVERDUE">기한 지남</option>
+                <option value="UPCOMING">예정</option>
+              </select>
+            </label>
+            <label>
+              <span>정렬</span>
+              <select aria-label="정렬" value={sort} onChange={(event) => setSort(event.target.value as TodoSort)}>
+                <option value="updatedAt:desc">최근 수정순</option>
+                <option value="createdAt:desc">최근 생성순</option>
+              </select>
+            </label>
+          </div>
         </section>
 
         <div className="list-heading">
@@ -352,8 +406,8 @@ export function App() {
         {!loading && !listError && todos.length === 0 && (
           <section className="empty">
             <span aria-hidden="true">✓</span>
-            <h2>{query || status !== "ALL" ? "조건에 맞는 할 일이 없습니다" : "아직 할 일이 없습니다"}</h2>
-            <p>{query || status !== "ALL" ? "검색어나 필터를 바꿔 보세요." : "위 입력창에서 첫 할 일을 추가해 보세요."}</p>
+            <h2>{query || status !== "ALL" || due !== "ALL" ? "조건에 맞는 할 일이 없습니다" : "아직 할 일이 없습니다"}</h2>
+            <p>{query || status !== "ALL" || due !== "ALL" ? "검색어나 필터를 바꿔 보세요." : "위 입력창에서 첫 할 일을 추가해 보세요."}</p>
           </section>
         )}
         <ul className="todo-list" aria-busy={loading}>
@@ -368,6 +422,9 @@ export function App() {
             />
           ))}
         </ul>
+        {nextCursor && !listError && (
+          <button className="ghost load-more" disabled={loadingMore} onClick={() => void loadTodos(undefined, nextCursor, true)}>{loadingMore ? "불러오는 중…" : "더 보기"}</button>
+        )}
       </main>
       <div className="sr-only" role="status" aria-live="polite">{notice}</div>
     </div>

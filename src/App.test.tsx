@@ -82,7 +82,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.queryByText("계약 검토")).not.toBeInTheDocument());
   });
 
-  it("커서 페이지를 중복 없이 모두 병합한다", async () => {
+  it("커서 페이지를 더 보기 요청으로 점진적으로 병합한다", async () => {
     const secondTodo = { ...openTodo, id: "todo-2", title: "배포 확인" };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
@@ -92,9 +92,48 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("계약 검토")).toBeInTheDocument();
+    expect(screen.queryByText("배포 확인")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "더 보기" }));
     expect(await screen.findByText("배포 확인")).toBeInTheDocument();
     expect(screen.getByText("2개")).toBeInTheDocument();
     expect(String(fetchMock.mock.calls[2][0])).toContain("cursor=page-2");
+  });
+
+  it("기한과 정렬 query를 복원하고 잘못된 query를 정규화한다", async () => {
+    window.history.replaceState(null, "", "/todos?status=INVALID&due=OVERDUE&sort=createdAt%3Adesc&ignored=1");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "조건에 맞는 할 일이 없습니다" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "기한 필터" })).toHaveValue("OVERDUE");
+    expect(screen.getByRole("combobox", { name: "정렬" })).toHaveValue("createdAt:desc");
+    await waitFor(() => expect(window.location.search).toBe("?due=OVERDUE&sort=createdAt%3Adesc"));
+    expect(String(fetchMock.mock.calls[1][0])).toContain("due=OVERDUE");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("sort=createdAt%3Adesc");
+  });
+
+  it("생성 성공 응답을 반영하고 요청 body와 멱등성 헤더를 전송한다", async () => {
+    const created = { ...openTodo, id: "todo-created", title: "새 작업" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [] }))
+      .mockResolvedValueOnce(json(created));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    const input = await screen.findByRole("textbox", { name: "새 할 일 제목" });
+    await userEvent.type(input, "  새 작업  ");
+    await userEvent.click(screen.getByRole("button", { name: "추가" }));
+
+    expect(await screen.findByText("새 작업")).toBeInTheDocument();
+    expect(input).toHaveValue("");
+    const request = fetchMock.mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({ title: "새 작업" });
+    expect((request.headers as Headers).get("Idempotency-Key")).toBeTruthy();
+    expect((request.headers as Headers).get("X-CSRF-Token")).toBe("test-csrf");
   });
 
   it("로그아웃 실패 시 보호 데이터를 제거하고 재시도 경로를 제공한다", async () => {

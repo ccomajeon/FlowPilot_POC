@@ -12,6 +12,10 @@ export type Todo = {
 };
 export type TodoInput = { title: string; description?: string | null; dueDate?: string | null };
 export type TodoPage = { items: Todo[]; nextCursor?: string | null };
+export type DueFilter = "ALL" | "TODAY" | "OVERDUE" | "UPCOMING";
+export type TodoSort = "updatedAt:desc" | "createdAt:desc";
+export type TodoFilters = { status: string; query: string; due: DueFilter; sort: TodoSort };
+export type RetryInfo = { attempt: number; delayMs: number };
 
 export class ApiError extends Error {
   constructor(
@@ -72,6 +76,29 @@ function parseSession(value: unknown): Session {
   return { authenticated: data.authenticated, user, csrfToken: data.csrfToken as string | undefined };
 }
 
+function isCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+function isIsoInstant(value: string): boolean {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match || !isCalendarDate(match[1])) return false;
+  if (Number(match[2]) > 23 || Number(match[3]) > 59 || Number(match[4]) > 59) return false;
+  if (match[5] !== "Z") {
+    const [hours, minutes] = match[5].slice(1).split(":").map(Number);
+    if (hours > 23 || minutes > 59) return false;
+  }
+  return !Number.isNaN(Date.parse(value));
+}
+
 function parseTodo(value: unknown): Todo {
   const data = record(value);
   const status = data.status;
@@ -80,8 +107,8 @@ function parseTodo(value: unknown): Todo {
   const updatedAt = string(data.updatedAt);
   if (status !== "OPEN" && status !== "DONE") throw contractError();
   if (!Number.isInteger(data.version) || (data.version as number) < 0) throw contractError();
-  if (dueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw contractError();
-  if (Number.isNaN(Date.parse(createdAt)) || Number.isNaN(Date.parse(updatedAt))) throw contractError();
+  if (dueDate !== null && !isCalendarDate(dueDate)) throw contractError();
+  if (!isIsoInstant(createdAt) || !isIsoInstant(updatedAt)) throw contractError();
   return {
     id: string(data.id), title: string(data.title), description: nullableString(data.description),
     status, dueDate, version: data.version as number, createdAt, updatedAt
@@ -142,11 +169,36 @@ async function refreshSession(): Promise<boolean> {
   return sessionRefresh;
 }
 
+const RETRYABLE_GET_STATUSES = new Set([429, 502, 503, 504]);
+
+function retryDelay(response: Response | undefined, attempt: number): number {
+  const header = response?.headers.get("Retry-After")?.trim();
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    const date = Date.parse(header);
+    if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+  }
+  return 250 * (2 ** attempt) + Math.floor(Math.random() * 101);
+}
+
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(resolve, delayMs);
+    signal?.addEventListener("abort", () => {
+      window.clearTimeout(timer);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
   retryAuth = true,
-  validate?: (value: unknown) => T
+  validate?: (value: unknown) => T,
+  onRetry?: (info: RetryInfo) => void
 ): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -159,9 +211,26 @@ async function request<T>(
     headers.set("X-CSRF-Token", csrfToken);
   }
 
-  const response = await fetch(path, { ...init, method, headers, credentials: "include" });
+  let response: Response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(path, { ...init, method, headers, credentials: "include" });
+    } catch (error) {
+      if (method === "GET" && attempt < 2 && !init.signal?.aborted) {
+        const delayMs = retryDelay(undefined, attempt);
+        onRetry?.({ attempt: attempt + 1, delayMs });
+        await waitForRetry(delayMs, init.signal);
+        continue;
+      }
+      throw error;
+    }
+    if (method !== "GET" || attempt >= 2 || !RETRYABLE_GET_STATUSES.has(response.status)) break;
+    const delayMs = retryDelay(response, attempt);
+    onRetry?.({ attempt: attempt + 1, delayMs });
+    await waitForRetry(delayMs, init.signal);
+  }
   if (response.status === 401) {
-    if (retryAuth && (await refreshSession())) return request<T>(path, init, false, validate);
+    if (retryAuth && (await refreshSession())) return request<T>(path, init, false, validate, onRetry);
     if (!retryAuth) expireAuthentication();
   }
   if (!response.ok) throw await parseError(response);
@@ -217,12 +286,13 @@ export const api = {
     if (session.authenticated) await api.logout();
   },
 
-  todos(filters: { status: string; query: string }, signal?: AbortSignal, cursor?: string): Promise<TodoPage> {
-    const params = new URLSearchParams({ sort: "updatedAt:desc" });
+  todos(filters: TodoFilters, signal?: AbortSignal, cursor?: string, onRetry?: (info: RetryInfo) => void): Promise<TodoPage> {
+    const params = new URLSearchParams({ sort: filters.sort });
     if (filters.status !== "ALL") params.set("status", filters.status);
     if (filters.query) params.set("q", filters.query);
+    if (filters.due !== "ALL") params.set("due", filters.due);
     if (cursor) params.set("cursor", cursor);
-    return request<TodoPage>(`/api/v1/todos?${params}`, { signal }, true, parseTodoPage);
+    return request<TodoPage>(`/api/v1/todos?${params}`, { signal }, true, parseTodoPage, onRetry);
   },
 
   create(input: TodoInput): Promise<Todo> {

@@ -17,8 +17,10 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -179,6 +181,7 @@ class TodoQualityGateTest {
     }
 
     @Test
+    @Timeout(30)
     void actualParallelTransactionsCannotOverwriteEachOther() throws Exception {
         Todo seed = repository.saveAndFlush(new Todo("owner", "seed", null, TodoStatus.TODO, LocalDate.now()));
         CountDownLatch loaded = new CountDownLatch(2);
@@ -188,9 +191,13 @@ class TodoQualityGateTest {
         try (var executor = Executors.newFixedThreadPool(2)) {
             Future<Object> first = executor.submit(update);
             Future<Object> second = executor.submit(update);
-            loaded.await();
-            release.countDown();
-            List<Object> outcomes = List.of(first.get(), second.get());
+            try {
+                assertThat(loaded.await(10, TimeUnit.SECONDS)).as("both updates loaded the todo").isTrue();
+            } finally {
+                release.countDown();
+            }
+            List<Object> outcomes = List.of(
+                first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
             assertThat(outcomes.stream().filter("updated"::equals).count()).isEqualTo(1);
             assertThat(outcomes.stream().filter(value -> value instanceof RuntimeException).count()).isEqualTo(1);
         }
@@ -233,7 +240,9 @@ class TodoQualityGateTest {
 
     private static void await(CountDownLatch latch) {
         try {
-            latch.await();
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("concurrency test latch timed out");
+            }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("concurrency test interrupted", exception);

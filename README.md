@@ -13,17 +13,34 @@ createuser --pwprompt todo_app
 psql --dbname=todos --username=todo_migrator
 ```
 
-접속한 `psql`에서 애플리케이션 계정의 최소 권한과 이후 Flyway 테이블의 기본 권한을 설정합니다.
+접속한 `psql`에서 애플리케이션 계정의 접속 권한만 먼저 설정합니다. 모든 테이블 또는 향후 생성될 테이블에 대한 기본 DML 권한은 부여하지 않습니다.
 
 ```sql
 GRANT CONNECT ON DATABASE todos TO todo_app;
 GRANT USAGE ON SCHEMA public TO todo_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO todo_app;
+REVOKE CREATE ON SCHEMA public FROM todo_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE todo_migrator IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO todo_app;
+  REVOKE ALL PRIVILEGES ON TABLES FROM todo_app;
 ```
 
-`todo_app`에는 `CREATE`, `ALTER`, `DROP` 또는 Flyway schema history 변경 권한을 부여하지 않습니다. 운영에서는 계정 생성과 GRANT를 플랫폼 관리 절차로 실행하고 실제 권한 거부를 배포 전에 확인해야 합니다.
+Flyway를 `todo_migrator`로 적용한 다음, 런타임에 필요한 테이블만 명시적으로 허용합니다.
+
+```sql
+REVOKE ALL PRIVILEGES ON TABLE public.flyway_schema_history FROM todo_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.todos TO todo_app;
+```
+
+배포 전에 실제 역할을 대상으로 권한을 확인합니다. 첫 번째 조회는 모두 `t`, 두 번째 조회는 모두 `f`여야 합니다.
+
+```sql
+SELECT has_table_privilege('todo_app', 'public.todos', privilege)
+FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS privilege;
+
+SELECT has_table_privilege('todo_app', 'public.flyway_schema_history', privilege)
+FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS privilege;
+```
+
+`todo_app`에는 `CREATE`, `ALTER`, `DROP` 또는 Flyway schema history 조회·변경 권한을 부여하지 않습니다. 운영에서는 계정 생성과 GRANT를 플랫폼 관리 절차로 실행하고 실제 권한 거부를 배포 전에 확인해야 합니다.
 
 ## 실행
 

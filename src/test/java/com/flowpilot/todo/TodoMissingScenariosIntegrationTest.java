@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -18,8 +19,11 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -114,30 +118,78 @@ class TodoMissingScenariosIntegrationTest {
     }
 
     @Test
-    void runtimeRoleCannotChangeSchemaOrFlywayHistory() {
+    void runtimeRoleCannotChangeSchemaOrFlywayHistory() throws Exception {
+        String schema = "runtime_role_gate";
+        String migratorPassword = UUID.randomUUID().toString();
+        String appPassword = UUID.randomUUID().toString();
+        String database = jdbc.queryForObject("SELECT current_database()", String.class);
+
         jdbc.execute((ConnectionCallback<Void>) connection -> {
             try (Statement statement = connection.createStatement()) {
-                statement.execute("CREATE ROLE todo_runtime_gate NOLOGIN");
-                try {
-                    statement.execute("GRANT USAGE ON SCHEMA public TO todo_runtime_gate");
-                    statement.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO todo_runtime_gate");
-                    statement.execute("SET ROLE todo_runtime_gate");
-                    try (ResultSet result = statement.executeQuery("SELECT count(*) FROM todos")) {
-                        assertThat(result.next()).isTrue();
-                    }
-                    assertPrivilegeDenied(statement, "ALTER TABLE todos ADD COLUMN forbidden_column text");
-                    assertPrivilegeDenied(statement, "DELETE FROM flyway_schema_history");
-                } finally {
-                    statement.execute("RESET ROLE");
-                    statement.execute("DROP OWNED BY todo_runtime_gate");
-                    statement.execute("DROP ROLE todo_runtime_gate");
-                }
+                statement.execute("CREATE ROLE todo_migrator LOGIN PASSWORD '" + migratorPassword + "'");
+                statement.execute("CREATE ROLE todo_app LOGIN PASSWORD '" + appPassword + "'");
+                statement.execute("CREATE SCHEMA " + schema + " AUTHORIZATION todo_migrator");
+                statement.execute("GRANT CONNECT ON DATABASE " + quoteIdentifier(database) + " TO todo_app");
+                statement.execute("GRANT USAGE ON SCHEMA " + schema + " TO todo_app");
+                statement.execute("REVOKE CREATE ON SCHEMA " + schema + " FROM todo_app");
+                statement.execute("ALTER DEFAULT PRIVILEGES FOR ROLE todo_migrator IN SCHEMA " + schema
+                    + " REVOKE ALL PRIVILEGES ON TABLES FROM todo_app");
             }
             return null;
         });
+
+        try {
+            Flyway.configure()
+                .dataSource(POSTGRES.getJdbcUrl(), "todo_migrator", migratorPassword)
+                .schemas(schema)
+                .defaultSchema(schema)
+                .createSchemas(false)
+                .locations("classpath:db/migration")
+                .load()
+                .migrate();
+
+            jdbc.execute("REVOKE ALL PRIVILEGES ON TABLE " + schema + ".flyway_schema_history FROM todo_app");
+            jdbc.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " + schema + ".todos TO todo_app");
+
+            for (String privilege : List.of("SELECT", "INSERT", "UPDATE", "DELETE")) {
+                assertThat(hasTablePrivilege("todo_app", schema + ".todos", privilege)).isTrue();
+                assertThat(hasTablePrivilege("todo_app", schema + ".flyway_schema_history", privilege)).isFalse();
+            }
+
+            try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), "todo_app", appPassword);
+                    Statement statement = connection.createStatement()) {
+                statement.execute("SET search_path TO " + schema);
+                try (ResultSet result = statement.executeQuery("SELECT count(*) FROM todos")) {
+                    assertThat(result.next()).isTrue();
+                }
+                assertPrivilegeDenied(statement, "ALTER TABLE todos ADD COLUMN forbidden_column text");
+                assertPrivilegeDenied(statement, "DELETE FROM flyway_schema_history");
+            }
+        } finally {
+            jdbc.execute((ConnectionCallback<Void>) connection -> {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
+                    statement.execute("DROP OWNED BY todo_app");
+                    statement.execute("DROP OWNED BY todo_migrator");
+                    statement.execute("DROP ROLE todo_app");
+                    statement.execute("DROP ROLE todo_migrator");
+                }
+                return null;
+            });
+        }
+    }
+
+    private boolean hasTablePrivilege(String role, String table, String privilege) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT has_table_privilege(?, ?, ?)", Boolean.class, role, table, privilege));
+    }
+
+    private static String quoteIdentifier(String value) {
+        return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 
     @Test
+    @Timeout(30)
     void patchAndDeleteRaceAllowsOnlyOneCommit() throws Exception {
         Todo seed = repository.saveAndFlush(new Todo("owner", "seed", null, TodoStatus.TODO, null));
         CountDownLatch loaded = new CountDownLatch(2);
@@ -148,9 +200,13 @@ class TodoMissingScenariosIntegrationTest {
         try (var executor = Executors.newFixedThreadPool(2)) {
             Future<Object> patchResult = executor.submit(patch);
             Future<Object> deleteResult = executor.submit(delete);
-            loaded.await();
-            release.countDown();
-            List<Object> outcomes = List.of(patchResult.get(), deleteResult.get());
+            try {
+                assertThat(loaded.await(10, TimeUnit.SECONDS)).as("both mutations loaded the todo").isTrue();
+            } finally {
+                release.countDown();
+            }
+            List<Object> outcomes = List.of(
+                patchResult.get(10, TimeUnit.SECONDS), deleteResult.get(10, TimeUnit.SECONDS));
             assertThat(outcomes.stream().filter(value -> value instanceof String).count()).isEqualTo(1);
             assertThat(outcomes.stream().filter(value -> value instanceof RuntimeException).count()).isEqualTo(1);
         }
@@ -197,7 +253,9 @@ class TodoMissingScenariosIntegrationTest {
 
     private static void await(CountDownLatch latch) {
         try {
-            latch.await();
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("concurrency test latch timed out");
+            }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("concurrency test interrupted", exception);

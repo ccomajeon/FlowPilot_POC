@@ -14,7 +14,7 @@ export type TodoInput = { title: string; description?: string | null; dueDate?: 
 export type TodoPage = { items: Todo[]; nextCursor?: string | null };
 export type DueFilter = "ALL" | "TODAY" | "OVERDUE" | "UPCOMING";
 export type TodoSort = "updatedAt:desc" | "createdAt:desc";
-export type TodoFilters = { status: string; query: string; due: DueFilter; sort: TodoSort };
+export type TodoFilters = { status: string; query: string; due?: DueFilter; sort?: TodoSort };
 export type RetryInfo = { attempt: number; delayMs: number };
 
 export class ApiError extends Error {
@@ -287,10 +287,12 @@ export const api = {
   },
 
   todos(filters: TodoFilters, signal?: AbortSignal, cursor?: string, onRetry?: (info: RetryInfo) => void): Promise<TodoPage> {
-    const params = new URLSearchParams({ sort: filters.sort });
+    const due = filters.due ?? "ALL";
+    const sort = filters.sort ?? "updatedAt:desc";
+    const params = new URLSearchParams({ sort });
     if (filters.status !== "ALL") params.set("status", filters.status);
     if (filters.query) params.set("q", filters.query);
-    if (filters.due !== "ALL") params.set("due", filters.due);
+    if (due !== "ALL") params.set("due", due);
     if (cursor) params.set("cursor", cursor);
     return request<TodoPage>(`/api/v1/todos?${params}`, { signal }, true, parseTodoPage, onRetry);
   },

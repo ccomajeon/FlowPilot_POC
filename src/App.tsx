@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, DueFilter, onAuthExpired, Session, Todo, TodoInput, TodoSort, userMessage } from "./api";
 
 type Filter = "ALL" | "OPEN" | "DONE";
@@ -16,6 +16,24 @@ function readFilters(): QueryFilters {
     sort: sortValue === "createdAt:desc" ? sortValue : "updatedAt:desc"
   };
 }
+
+function localCalendarDate(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function matchesDueFilter(todo: Todo, due: DueFilter): boolean {
+  if (due === "ALL") return true;
+  if (!todo.dueDate) return false;
+  const today = localCalendarDate();
+  if (due === "TODAY") return todo.dueDate === today;
+  if (due === "OVERDUE") return todo.dueDate < today;
+  return todo.dueDate > today;
+}
+
+const DISCARD_MESSAGE = "저장하지 않은 변경사항이 있습니다. 변경사항을 폐기할까요?";
 
 function LoginPage({ error, onRetryLogout }: { error?: string; onRetryLogout?: () => void }) {
   return (
@@ -37,17 +55,34 @@ function LoginPage({ error, onRetryLogout }: { error?: string; onRetryLogout?: (
 function TodoEditor({
   todo,
   onSave,
-  onCancel
+  onCancel,
+  onDirtyChange
 }: {
   todo?: Todo;
   onSave: (input: TodoInput) => Promise<void>;
   onCancel?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [title, setTitle] = useState(todo?.title ?? "");
   const [description, setDescription] = useState(todo?.description ?? "");
   const [dueDate, setDueDate] = useState(todo?.dueDate ?? "");
   const [saving, setSaving] = useState(false);
   const [fieldError, setFieldError] = useState("");
+
+  const dirty = Boolean(todo) && (
+    title !== (todo?.title ?? "")
+    || description !== (todo?.description ?? "")
+    || dueDate !== (todo?.dueDate ?? "")
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
+
+  function cancel() {
+    if (!dirty || window.confirm(DISCARD_MESSAGE)) onCancel?.();
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -107,7 +142,7 @@ function TodoEditor({
         </>
       )}
       <div className="form-actions">
-        {onCancel && <button type="button" className="ghost" onClick={onCancel}>취소</button>}
+        {onCancel && <button type="button" className="ghost" onClick={cancel}>취소</button>}
         <button className="primary" disabled={saving}>{saving ? "저장 중…" : todo ? "저장" : "추가"}</button>
       </div>
     </form>
@@ -119,21 +154,35 @@ function TodoRow({
   busy,
   onToggle,
   onSave,
-  onDelete
+  onDelete,
+  onDirtyChange
 }: {
   todo: Todo;
   busy: boolean;
   onToggle: () => void;
   onSave: (input: TodoInput) => Promise<void>;
   onDelete: () => void;
+  onDirtyChange: (id: string, dirty: boolean) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const reportDirty = useCallback(
+    (dirty: boolean) => onDirtyChange(todo.id, dirty),
+    [onDirtyChange, todo.id]
+  );
+
+  const closeEditor = useCallback(() => {
+    setEditing(false);
+    onDirtyChange(todo.id, false);
+    window.setTimeout(() => editButton.current?.focus(), 0);
+  }, [onDirtyChange, todo.id]);
+
   if (editing) {
     return (
       <li className="todo-card editing">
-        <TodoEditor todo={todo} onCancel={() => setEditing(false)} onSave={async (input) => {
+        <TodoEditor todo={todo} onCancel={closeEditor} onDirtyChange={reportDirty} onSave={async (input) => {
           await onSave(input);
-          setEditing(false);
+          closeEditor();
         }} />
       </li>
     );
@@ -153,7 +202,7 @@ function TodoRow({
         {todo.dueDate && <small>기한 {todo.dueDate}</small>}
       </div>
       <div className="row-actions">
-        <button className="icon-button" disabled={busy} onClick={() => setEditing(true)} aria-label={`${todo.title} 수정`}>수정</button>
+        <button ref={editButton} className="icon-button" disabled={busy} onClick={() => setEditing(true)} aria-label={`${todo.title} 수정`}>수정</button>
         <button className="icon-button danger" disabled={busy} onClick={onDelete} aria-label={`${todo.title} 삭제`}>삭제</button>
       </div>
     </li>
@@ -175,12 +224,32 @@ export function App() {
   const [listError, setListError] = useState("");
   const [notice, setNotice] = useState("");
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [dirtyEditorIds, setDirtyEditorIds] = useState<Set<string>>(new Set());
   const [serverLogoutPending, setServerLogoutPending] = useState(false);
   const [dark, setDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
   const requestNumber = useRef(0);
   const seenCursors = useRef(new Set<string>());
   const pageCount = useRef(0);
   const itemCount = useRef(0);
+
+  const markEditorDirty = useCallback((id: string, dirty: boolean) => {
+    setDirtyEditorIds((current) => {
+      if (current.has(id) === dirty) return current;
+      const next = new Set(current);
+      dirty ? next.add(id) : next.delete(id);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (dirtyEditorIds.size === 0) return;
+    const protectUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", protectUnload);
+    return () => window.removeEventListener("beforeunload", protectUnload);
+  }, [dirtyEditorIds.size]);
 
   useEffect(() => onAuthExpired(() => {
     requestNumber.current += 1;
@@ -271,7 +340,7 @@ export function App() {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     const baseMatch = (status === "ALL" || todo.status === status)
       && (!normalizedQuery || todo.title.toLocaleLowerCase().includes(normalizedQuery));
-    return baseMatch && due === "ALL";
+    return baseMatch && matchesDueFilter(todo, due);
   }
 
   async function createTodo(input: TodoInput) {
@@ -317,8 +386,10 @@ export function App() {
   }
 
   async function logout() {
+    if (dirtyEditorIds.size > 0 && !window.confirm(DISCARD_MESSAGE)) return;
     setTodos([]);
     setBusyIds(new Set());
+    setDirtyEditorIds(new Set());
     setSessionError("");
     setServerLogoutPending(false);
     setSession({ authenticated: false, user: null });
@@ -340,13 +411,19 @@ export function App() {
     }
   }
 
+  function protectNavigation(event: MouseEvent<HTMLAnchorElement>) {
+    if (dirtyEditorIds.size > 0 && !window.confirm(DISCARD_MESSAGE)) {
+      event.preventDefault();
+    }
+  }
+
   if (!session) return <main className="center" aria-busy="true"><div className="spinner" /><p>세션을 확인하고 있습니다.</p></main>;
   if (!session.authenticated) return <LoginPage error={sessionError} onRetryLogout={serverLogoutPending ? () => void retryLogout() : undefined} />;
 
   return (
     <div className={dark ? "app dark" : "app"}>
       <header className="topbar">
-        <a className="logo" href="/todos" aria-label="Flow Todo 홈"><span>✓</span> Flow Todo</a>
+        <a className="logo" href="/todos" aria-label="Flow Todo 홈" onClick={protectNavigation}><span>✓</span> Flow Todo</a>
         <div className="account">
           <button className="icon-button" onClick={() => setDark((value) => !value)} aria-label={dark ? "라이트 모드 사용" : "다크 모드 사용"}>{dark ? "☀" : "☾"}</button>
           <span className="avatar" aria-hidden="true">{session.user?.displayName?.slice(0, 1) || "U"}</span>
@@ -419,6 +496,7 @@ export function App() {
               onToggle={() => void updateTodo(todo, { status: todo.status === "DONE" ? "OPEN" : "DONE" }).catch(() => undefined)}
               onSave={(input) => updateTodo(todo, input)}
               onDelete={() => void removeTodo(todo)}
+              onDirtyChange={markEditorDirty}
             />
           ))}
         </ul>

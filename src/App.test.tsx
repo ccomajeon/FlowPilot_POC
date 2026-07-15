@@ -22,6 +22,8 @@ function json(body: unknown, status = 200): Response {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
 });
@@ -146,5 +148,141 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "로그아웃" }));
     expect(await screen.findByRole("button", { name: "서버 로그아웃 다시 시도" })).toBeInTheDocument();
     expect(screen.queryByText("계약 검토")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["TODAY", "2026-07-15", true],
+    ["TODAY", "2026-07-16", false],
+    ["OVERDUE", "2026-07-14", true],
+    ["OVERDUE", "2026-07-15", false],
+    ["UPCOMING", "2026-07-16", true],
+    ["UPCOMING", "2026-07-14", false]
+  ] as const)("%s 필터에서 생성 응답의 기한 %s 표시 여부를 판정한다", async (due, dueDate, visible) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(2026, 6, 15, 12, 0, 0));
+    window.history.replaceState(null, "", `/todos?due=${due}`);
+    const created = { ...openTodo, id: "created", title: "필터 생성 항목", dueDate };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [] }))
+      .mockResolvedValueOnce(json(created)));
+    render(<App />);
+
+    const input = await screen.findByRole("textbox", { name: "새 할 일 제목" });
+    await userEvent.click(input);
+    await userEvent.keyboard("필터 생성 항목");
+    await userEvent.click(screen.getByRole("button", { name: "추가" }));
+
+    await waitFor(() => {
+      if (visible) expect(screen.getByText("필터 생성 항목")).toBeInTheDocument();
+      else expect(screen.queryByText("필터 생성 항목")).not.toBeInTheDocument();
+    });
+  });
+
+  it("변경 없는 편집은 즉시 닫고 변경된 편집은 확인 후 포커스를 복원한다", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo] })));
+    render(<App />);
+
+    const edit = await screen.findByRole("button", { name: "계약 검토 수정" });
+    await userEvent.click(edit);
+    await userEvent.click(screen.getByRole("button", { name: "취소" }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(edit).toHaveFocus();
+
+    await userEvent.click(edit);
+    const title = screen.getByRole("textbox", { name: "제목" });
+    await userEvent.type(title, " 변경");
+    await userEvent.click(screen.getByRole("button", { name: "취소" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(title).toBeInTheDocument();
+
+    confirm.mockReturnValue(true);
+    await userEvent.click(screen.getByRole("button", { name: "취소" }));
+    await waitFor(() => expect(edit).toHaveFocus());
+    expect(screen.queryByRole("textbox", { name: "제목" })).not.toBeInTheDocument();
+  });
+
+  it("저장하지 않은 편집이 있으면 로그아웃을 취소할 수 있다", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "계약 검토 수정" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "제목" }), " 변경");
+    await userEvent.click(screen.getByRole("button", { name: "로그아웃" }));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("textbox", { name: "제목" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("중간 페이지 조회 실패 시 이미 표시한 항목을 보존한다", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo], nextCursor: "page-2" }))
+      .mockResolvedValue(json({}, 500)));
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
+    expect(await screen.findByText("계약 검토")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+  });
+
+  it("서버가 동일 cursor를 반복하면 기존 목록을 보존하고 중단한다", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo], nextCursor: "page-2" }))
+      .mockResolvedValueOnce(json({ items: [], nextCursor: "page-2" })));
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
+    expect(await screen.findByText("페이지 응답이 올바르지 않습니다.")).toBeInTheDocument();
+    expect(screen.getByText("계약 검토")).toBeInTheDocument();
+  });
+
+  it("500항목 한도에서 후속 페이지 요청을 차단한다", async () => {
+    const items = Array.from({ length: 500 }, (_, index) => ({
+      ...openTodo,
+      id: `todo-${index}`,
+      title: `항목 ${index}`
+    }));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items, nextCursor: "page-2" })));
+    render(<App />);
+
+    expect(await screen.findByText("500개")).toBeInTheDocument();
+    expect(screen.getByText("표시 가능한 목록 한도에 도달했습니다. 필터를 좁혀 주세요.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "더 보기" })).not.toBeInTheDocument();
+  });
+
+  it("20페이지 한도에서 후속 cursor를 폐기한다", async () => {
+    let page = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === "/auth/session") {
+        return Promise.resolve(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }));
+      }
+      page += 1;
+      return Promise.resolve(json({
+        items: [{ ...openTodo, id: `todo-${page}`, title: `페이지 ${page}` }],
+        nextCursor: `page-${page + 1}`
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    expect(await screen.findByText("1개")).toBeInTheDocument();
+    for (let expected = 2; expected <= 20; expected += 1) {
+      await userEvent.click(screen.getByRole("button", { name: "더 보기" }));
+      expect(await screen.findByText(`${expected}개`)).toBeInTheDocument();
+    }
+    expect(screen.getByText("표시 가능한 목록 한도에 도달했습니다. 필터를 좁혀 주세요.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "더 보기" })).not.toBeInTheDocument();
   });
 });

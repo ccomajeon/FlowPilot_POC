@@ -43,8 +43,8 @@ describe("api", () => {
     const unsubscribe = onAuthExpired(expired);
 
     const results = await Promise.allSettled([
-      api.todos({ status: "ALL", query: "" }),
-      api.todos({ status: "OPEN", query: "" })
+      api.todos({ status: "ALL", query: "", due: "ALL", sort: "updatedAt:desc" }),
+      api.todos({ status: "OPEN", query: "", due: "ALL", sort: "updatedAt:desc" })
     ]);
 
     expect(results.every((result) => result.status === "rejected")).toBe(true);
@@ -56,7 +56,7 @@ describe("api", () => {
   it("잘못된 Todo enum을 UI 상태로 반환하지 않는다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ items: [{ ...todo, status: "UNKNOWN" }] })));
 
-    await expect(api.todos({ status: "ALL", query: "" })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    await expect(api.todos({ status: "ALL", query: "", due: "ALL", sort: "updatedAt:desc" })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
   it("잘못된 version과 날짜를 계약 오류로 변환한다", async () => {
@@ -64,7 +64,7 @@ describe("api", () => {
       items: [{ ...todo, version: "1", updatedAt: "not-a-date" }]
     })));
 
-    await expect(api.todos({ status: "ALL", query: "" })).rejects.toMatchObject({
+    await expect(api.todos({ status: "ALL", query: "", due: "ALL", sort: "updatedAt:desc" })).rejects.toMatchObject({
       code: "INVALID_RESPONSE",
       message: "서버 응답 형식이 올바르지 않습니다."
     });
@@ -125,5 +125,53 @@ describe("api", () => {
 
     await expect(result).resolves.toMatchObject({ items: [{ id: "todo-1" }] });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("생략된 기한과 정렬에 API 기본값을 적용한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.todos({ status: "ALL", query: "" });
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]), "https://example.test");
+    expect(url.searchParams.get("sort")).toBe("updatedAt:desc");
+    expect(url.searchParams.has("due")).toBe(false);
+  });
+
+  it("Retry-After 초 값을 다음 조회 지연에 반영한다", async () => {
+    vi.useFakeTimers();
+    const onRetry = vi.fn();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "Retry-After": "2" } }))
+      .mockResolvedValueOnce(json({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = api.todos(
+      { status: "ALL", query: "" },
+      undefined,
+      undefined,
+      onRetry
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(result).resolves.toEqual({ items: [], nextCursor: undefined });
+    expect(onRetry).toHaveBeenCalledWith({ attempt: 1, delayMs: 2000 });
+  });
+
+  it("AbortSignal이 재시도 대기를 즉시 취소한다", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(json({}, 503));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = api.todos({ status: "ALL", query: "" }, controller.signal);
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

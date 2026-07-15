@@ -16,6 +16,8 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.transaction.CannotCreateTransactionException;
 
 @RestControllerAdvice
@@ -65,6 +67,9 @@ class ApiExceptionHandler {
     private ProblemDetail problem(HttpStatus status, String code, String detail) {
         ProblemDetail p = ProblemDetail.forStatusAndDetail(status, detail);
         p.setType(URI.create("about:blank"));
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+            p.setInstance(URI.create(attributes.getRequest().getRequestURI()));
+        }
         p.setProperty("code", code);
         p.setProperty("correlationId", MDC.get(CorrelationIdFilter.MDC_KEY));
         return p;

@@ -67,7 +67,13 @@ class TodoController {
 }
 
 record TodoCreate(@NotBlank @Size(max=200) String title, @Size(max=5000) String description,
-                  TodoStatus status, LocalDate dueDate) {}
+                  TodoStatus status, LocalDate dueDate) {
+    TodoCreate {
+        if (title != null) {
+            title = title.trim();
+        }
+    }
+}
 record TodoPatch(String title, boolean descriptionPresent, String description, TodoStatus status,
                  boolean dueDatePresent, LocalDate dueDate) {
     private static final Set<String> FIELDS = Set.of("title", "description", "status", "dueDate");

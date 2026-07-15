@@ -65,6 +65,19 @@ class TodoApiIntegrationTest {
         mvc.perform(get("/api/v1/todos")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/v1/todos").with(jwt())).andExpect(status().isForbidden());
         mvc.perform(post("/api/v1/todos").with(user("alice")).contentType(MediaType.APPLICATION_JSON).content("{\"title\":\" \"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.instance").value("/api/v1/todos"));
+
+        String maximumTitle = "x".repeat(200);
+        mvc.perform(post("/api/v1/todos").with(user("alice"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"title\":\" " + maximumTitle + " \"}"))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.title").value(maximumTitle));
+
+        mvc.perform(post("/api/v1/todos").with(user("alice"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"title\":\" " + "x".repeat(201) + " \"}"))
             .andExpect(status().isBadRequest());
     }
 

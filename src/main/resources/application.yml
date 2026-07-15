@@ -41,6 +41,12 @@ management:
   health:
     db:
       enabled: true
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.95,0.99
 logging:
   structured:
     format:

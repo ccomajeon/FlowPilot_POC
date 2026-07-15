@@ -1,8 +1,10 @@
 package com.flowpilot.todo;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,7 +22,7 @@ import org.testcontainers.junit.jupiter.*;
 @AutoConfigureMockMvc
 @Testcontainers
 class TodoApiIntegrationTest {
-    @Container static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+    @Container static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(TestPostgresImage.get());
     @DynamicPropertySource static void database(DynamicPropertyRegistry r) {
         r.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         r.add("spring.datasource.username", POSTGRES::getUsername);
@@ -34,6 +36,7 @@ class TodoApiIntegrationTest {
     }
     @Autowired MockMvc mvc;
     @Autowired TodoRepository repository;
+    @Autowired MeterRegistry meterRegistry;
     @BeforeEach void clean() { repository.deleteAll(); }
 
     @Test void crudOwnershipAndConcurrency() throws Exception {
@@ -103,6 +106,20 @@ class TodoApiIntegrationTest {
             .andExpect(status().isNotFound());
         mvc.perform(delete("/api/v1/todos/{id}", id).with(user("bob")).header("If-Match", "\"0\""))
             .andExpect(status().isNotFound());
+    }
+
+    @Test void recordsCoreApiLatencyMetricsWithConfiguredPercentiles() throws Exception {
+        mvc.perform(get("/api/v1/todos").with(user("metrics-owner")))
+            .andExpect(status().isOk());
+
+        var timer = meterRegistry.find("http.server.requests")
+            .tag("uri", "/api/v1/todos")
+            .timer();
+        assertThat(timer).isNotNull();
+        assertThat(timer.count()).isPositive();
+        assertThat(timer.takeSnapshot().percentileValues())
+            .extracting(value -> value.percentile())
+            .contains(0.95, 0.99);
     }
 
     private static RequestPostProcessor user(String subject) {

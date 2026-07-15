@@ -2,6 +2,7 @@ package com.flowpilot.todo;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -109,6 +110,11 @@ class TodoQualityGateTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(Map.of("title", "valid", "description", "x".repeat(5001)))))
             .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/v1/todos").with(owner("owner-a"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"title\":\"valid\",\"ownerId\":\"owner-b\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 
     @Test
@@ -140,6 +146,18 @@ class TodoQualityGateTest {
         mvc.perform(delete("/api/v1/todos/" + id).with(owner("owner-a")).header("If-Match", etag))
             .andExpect(status().isNoContent());
         mvc.perform(get("/api/v1/todos/" + id).with(owner("owner-a"))).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void prometheusScrapeRequiresAdminScopeAndContainsHttpMetrics() throws Exception {
+        mvc.perform(get("/api/v1/todos").with(owner("owner-a")))
+            .andExpect(status().isOk());
+
+        mvc.perform(get("/actuator/prometheus").with(jwt()
+                .authorities(new SimpleGrantedAuthority("SCOPE_todos.admin"))))
+            .andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_PLAIN))
+            .andExpect(content().string(containsString("http_server_requests_seconds")));
     }
 
     @Test

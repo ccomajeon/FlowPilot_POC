@@ -19,5 +19,9 @@ class RuntimeDataSourceConfigurationTest {
             .isEqualTo("${DB_CONNECTION_TIMEOUT_MS:3000}");
         assertThat(source.getProperty("spring.datasource.hikari.validation-timeout"))
             .isEqualTo("${DB_VALIDATION_TIMEOUT_MS:1000}");
+        assertThat(source.getProperty("spring.jackson.deserialization.fail-on-unknown-properties"))
+            .isEqualTo(true);
+        assertThat(source.getProperty("management.endpoints.web.exposure.include"))
+            .isEqualTo("health,info,metrics,prometheus");
     }
 }

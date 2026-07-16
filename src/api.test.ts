@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, onAuthExpired } from "./api";
+import { api, onAuthExpired, userMessage } from "./api";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -68,6 +68,22 @@ describe("api", () => {
       code: "INVALID_RESPONSE",
       message: "서버 응답 형식이 올바르지 않습니다."
     });
+  });
+
+  it("검증되지 않은 오류 메타데이터를 사용자 메시지에서 제거한다", async () => {
+    expect.assertions(3);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({
+      code: "INVALID CODE",
+      traceId: "secret=<unsafe-value>"
+    }, 403)));
+
+    try {
+      await api.todos({ status: "ALL", query: "" });
+    } catch (error) {
+      expect(error).toMatchObject({ code: "REQUEST_FAILED", traceId: undefined });
+      expect(userMessage(error)).not.toContain("secret");
+      expect(userMessage(error)).toBe("요청한 작업을 수행할 권한이 없습니다.");
+    }
   });
 
   it.each([

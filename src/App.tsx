@@ -314,6 +314,9 @@ export function App() {
 
   useEffect(() => {
     if (!session?.authenticated) return;
+    requestNumber.current += 1;
+    setLoadingMore(false);
+    setNextCursor(undefined);
     const controller = new AbortController();
     const timer = window.setTimeout(() => void loadTodos(controller.signal), 250);
     const params = new URLSearchParams();
@@ -504,7 +507,7 @@ export function App() {
           <button className="ghost load-more" disabled={loadingMore} onClick={() => void loadTodos(undefined, nextCursor, true)}>{loadingMore ? "불러오는 중…" : "더 보기"}</button>
         )}
       </main>
-      <div className="sr-only" role="status" aria-live="polite">{notice}</div>
+      <div className="status-toast" role="status" aria-live="polite" aria-atomic="true">{notice}</div>
     </div>
   );
 }

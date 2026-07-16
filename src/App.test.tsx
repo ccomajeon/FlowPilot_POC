@@ -132,6 +132,7 @@ describe("App", () => {
 
     expect(await screen.findByText("새 작업")).toBeInTheDocument();
     expect(input).toHaveValue("");
+    expect(screen.getByRole("status")).not.toHaveClass("sr-only");
     const request = fetchMock.mock.calls[2][1] as RequestInit;
     expect(JSON.parse(String(request.body))).toMatchObject({ title: "새 작업" });
     expect((request.headers as Headers).get("Idempotency-Key")).toBeTruthy();
@@ -232,6 +233,33 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
     expect(await screen.findByText("계약 검토")).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toBeInTheDocument();
+  });
+
+  it("필터 변경 시 진행 중인 추가 조회 상태와 오래된 cursor 응답을 폐기한다", async () => {
+    let resolveOldPage!: (response: Response) => void;
+    const oldPage = new Promise<Response>((resolve) => {
+      resolveOldPage = resolve;
+    });
+    const searchResult = { ...openTodo, id: "todo-search", title: "검색 결과" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [openTodo], nextCursor: "page-2" }))
+      .mockReturnValueOnce(oldPage)
+      .mockResolvedValueOnce(json({ items: [searchResult], nextCursor: "search-page-2" }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "제목 검색" }), "검색");
+
+    expect(await screen.findByText("검색 결과")).toBeInTheDocument();
+    resolveOldPage(json({
+      items: [{ ...openTodo, id: "todo-old-page", title: "이전 페이지" }],
+      nextCursor: null
+    }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "더 보기" })).toBeEnabled());
+    expect(screen.queryByText("이전 페이지")).not.toBeInTheDocument();
   });
 
   it("서버가 동일 cursor를 반복하면 기존 목록을 보존하고 중단한다", async () => {

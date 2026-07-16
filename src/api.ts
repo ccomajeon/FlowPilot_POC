@@ -122,13 +122,21 @@ function parseTodoPage(value: unknown): TodoPage {
   return { items: data.items.map(parseTodo), nextCursor: data.nextCursor as string | null | undefined };
 }
 
+function safeIdentifier(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(value)) return undefined;
+  return value;
+}
+
 async function parseError(response: Response): Promise<ApiError> {
-  let body: { code?: string; traceId?: string } = {};
+  let body: unknown;
   try {
-    body = (await response.json()) as typeof body;
+    body = await response.json();
   } catch {
     // Error bodies are optional and never echoed to the UI.
   }
+  const metadata = body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {};
   const messages: Record<number, string> = {
     401: "로그인이 만료되었습니다. 다시 로그인해 주세요.",
     403: "요청한 작업을 수행할 권한이 없습니다.",
@@ -141,7 +149,12 @@ async function parseError(response: Response): Promise<ApiError> {
   const fallback = response.status >= 500
     ? "서비스가 일시적으로 불안정합니다. 잠시 후 다시 시도해 주세요."
     : "요청을 처리하지 못했습니다.";
-  return new ApiError(response.status, messages[response.status] ?? fallback, body.code, body.traceId);
+  return new ApiError(
+    response.status,
+    messages[response.status] ?? fallback,
+    safeIdentifier(metadata.code) ?? "REQUEST_FAILED",
+    safeIdentifier(metadata.traceId)
+  );
 }
 
 async function refreshSession(): Promise<boolean> {

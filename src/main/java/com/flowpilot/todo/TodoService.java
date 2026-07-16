@@ -3,6 +3,7 @@ package com.flowpilot.todo;
 import java.time.LocalDate;
 import java.util.*;
 import org.springframework.data.domain.*;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,14 +43,22 @@ class TodoService {
         Todo todo = owned(owner, id);
         if (todo.version != expected) throw new VersionConflict();
         todo.patch(patch);
-        return repository.saveOwned(todo);
+        try {
+            return repository.saveOwned(todo);
+        } catch (OptimisticLockingFailureException exception) {
+            throw new VersionConflict();
+        }
     }
 
     @Transactional
     void delete(String owner, UUID id, long expected) {
         Todo todo = owned(owner, id);
         if (todo.version != expected) throw new VersionConflict();
-        repository.deleteOwned(todo);
+        try {
+            repository.deleteOwned(todo);
+        } catch (OptimisticLockingFailureException exception) {
+            throw new VersionConflict();
+        }
     }
 
     private Todo owned(String owner, UUID id) {

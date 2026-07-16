@@ -21,13 +21,13 @@ class TodoController {
     @PostMapping
     ResponseEntity<TodoResponse> create(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody TodoCreate request) {
         Todo todo = service.create(jwt.getSubject(), request);
-        return ResponseEntity.created(URI.create("/api/v1/todos/" + todo.id)).eTag(etag(todo.version)).body(TodoResponse.of(todo));
+        return ResponseEntity.created(URI.create("/api/v1/todos/" + todo.id)).eTag(ETags.format(todo.version)).body(TodoResponse.of(todo));
     }
 
     @GetMapping("/{id}")
     ResponseEntity<TodoResponse> get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
         Todo todo = service.get(jwt.getSubject(), id);
-        return ResponseEntity.ok().eTag(etag(todo.version)).body(TodoResponse.of(todo));
+        return ResponseEntity.ok().eTag(ETags.format(todo.version)).body(TodoResponse.of(todo));
     }
 
     @GetMapping
@@ -41,20 +41,24 @@ class TodoController {
     @PatchMapping("/{id}")
     ResponseEntity<TodoResponse> patch(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
             @RequestHeader(value="If-Match", required=false) String match, @RequestBody JsonNode body) {
-        long expected = version(match);
+        long expected = ETags.parse(match);
         TodoPatch patch = TodoPatch.from(body);
         Todo todo = service.patch(jwt.getSubject(), id, expected, patch);
-        return ResponseEntity.ok().eTag(etag(todo.version)).body(TodoResponse.of(todo));
+        return ResponseEntity.ok().eTag(ETags.format(todo.version)).body(TodoResponse.of(todo));
     }
 
     @DeleteMapping("/{id}")
     ResponseEntity<Void> delete(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
             @RequestHeader(value="If-Match", required=false) String match) {
-        service.delete(jwt.getSubject(), id, version(match));
+        service.delete(jwt.getSubject(), id, ETags.parse(match));
         return ResponseEntity.noContent().build();
     }
+}
 
-    private static long version(String value) {
+final class ETags {
+    private ETags() {}
+
+    static long parse(String value) {
         if (value == null) throw new PreconditionRequired();
         if (!value.matches("\"[0-9]+\"")) throw new BadRequest("If-Match must be a quoted version");
         try {
@@ -63,7 +67,8 @@ class TodoController {
             throw new BadRequest("If-Match version is out of range");
         }
     }
-    private static String etag(long version) { return "\"" + version + "\""; }
+
+    static String format(long version) { return "\"" + version + "\""; }
 }
 
 record TodoCreate(@NotBlank @Size(max=200) String title, @Size(max=5000) String description,

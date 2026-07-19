@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.Optional;
@@ -82,7 +82,7 @@ class TodoServiceTest {
 
     private void verifyNoInteractionsAfterLookup(UUID id) {
         verify(repository).findByIdAndOwnerId(id, "owner");
-        verifyNoInteractions(repository);
+        verifyNoMoreInteractions(repository);
     }
 
     private static Todo todo(long version) {

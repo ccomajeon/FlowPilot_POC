@@ -22,7 +22,11 @@ class JwtPolicyTest {
     void rejectsWrongIssuerAudienceExpiredBlankAndOversizedSubjects() {
         assertThat(validator.validate(token(builder -> builder.issuer("https://other.example"))).hasErrors()).isTrue();
         assertThat(validator.validate(token(builder -> builder.audience(List.of("other-api")))).hasErrors()).isTrue();
-        assertThat(validator.validate(token(builder -> builder.expiresAt(Instant.now().minusSeconds(1)))).hasErrors()).isTrue();
+        Instant expiredAt = Instant.now().minusSeconds(90);
+        assertThat(validator.validate(token(builder -> builder
+            .issuedAt(expiredAt.minusSeconds(60))
+            .notBefore(expiredAt.minusSeconds(60))
+            .expiresAt(expiredAt))).hasErrors()).isTrue();
         assertThat(validator.validate(token(builder -> builder.subject(" "))).hasErrors()).isTrue();
         assertThat(validator.validate(token(builder -> builder.subject("x".repeat(256)))).hasErrors()).isTrue();
     }

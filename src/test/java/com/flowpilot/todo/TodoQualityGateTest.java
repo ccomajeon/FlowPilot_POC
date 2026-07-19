@@ -9,8 +9,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -256,7 +257,8 @@ class TodoQualityGateTest {
         jdbc.update("""
             INSERT INTO todos(id, owner_id, title, status, due_date, created_at, updated_at, version)
             VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-            """, id, owner, title, status, LocalDate.of(2026, 7, 31), Instant.now(), Instant.now());
+            """, id, owner, title, status, LocalDate.of(2026, 7, 31),
+            OffsetDateTime.now(ZoneOffset.UTC), OffsetDateTime.now(ZoneOffset.UTC));
     }
 
     private MvcResult create(String ownerId, String title, String status, String dueDate) throws Exception {

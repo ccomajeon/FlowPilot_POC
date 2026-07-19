@@ -2,6 +2,7 @@ package com.flowpilot.todo;
 
 import jakarta.persistence.OptimisticLockException;
 import java.net.URI;
+import java.sql.SQLException;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +22,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.orm.jpa.JpaSystemException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 class ApiExceptionHandler {
@@ -75,11 +78,40 @@ class ApiExceptionHandler {
         return problem(HttpStatus.SERVICE_UNAVAILABLE, "DATABASE_UNAVAILABLE", "서비스를 일시적으로 사용할 수 없습니다.");
     }
 
+    @ExceptionHandler(JpaSystemException.class)
+    ProblemDetail jpaSystem(JpaSystemException exception) {
+        if (isConnectionFailure(exception)) {
+            return databaseUnavailable(exception);
+        }
+        return unexpected(exception);
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    ProblemDetail resourceNotFound() {
+        return problem(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "요청한 자원을 찾을 수 없습니다.");
+    }
+
     @ExceptionHandler(Exception.class)
     ProblemDetail unexpected(Exception exception) {
         log.error("Unhandled request failure; correlationId={}, exceptionType={}",
             MDC.get(CorrelationIdFilter.MDC_KEY), exception.getClass().getName());
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "요청을 처리하지 못했습니다.");
+    }
+
+    private boolean isConnectionFailure(Throwable exception) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof SQLException sqlException
+                    && sqlException.getSQLState() != null
+                    && sqlException.getSQLState().startsWith("08")) {
+                return true;
+            }
+            if (current.getCause() == current) {
+                break;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private ValidationError validationError(FieldError error) {

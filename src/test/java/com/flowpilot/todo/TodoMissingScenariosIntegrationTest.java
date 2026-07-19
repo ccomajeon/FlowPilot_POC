@@ -13,6 +13,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -234,7 +236,9 @@ class TodoMissingScenariosIntegrationTest {
         jdbc.update("""
             INSERT INTO todos(id, owner_id, title, status, created_at, updated_at, version)
             VALUES (?, ?, ?, 'TODO', ?, ?, 0)
-            """, id, ownerId, title, time, time);
+            """, id, ownerId, title,
+            OffsetDateTime.ofInstant(time, ZoneOffset.UTC),
+            OffsetDateTime.ofInstant(time, ZoneOffset.UTC));
     }
 
     private static void assertPrivilegeDenied(Statement statement, String sql) {

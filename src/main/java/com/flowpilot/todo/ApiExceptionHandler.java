@@ -2,7 +2,6 @@ package com.flowpilot.todo;
 
 import jakarta.persistence.OptimisticLockException;
 import java.net.URI;
-import java.sql.SQLException;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -80,10 +79,7 @@ class ApiExceptionHandler {
 
     @ExceptionHandler(JpaSystemException.class)
     ProblemDetail jpaSystem(JpaSystemException exception) {
-        if (isConnectionFailure(exception)) {
-            return databaseUnavailable(exception);
-        }
-        return unexpected(exception);
+        return databaseUnavailable(exception);
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
@@ -96,22 +92,6 @@ class ApiExceptionHandler {
         log.error("Unhandled request failure; correlationId={}, exceptionType={}",
             MDC.get(CorrelationIdFilter.MDC_KEY), exception.getClass().getName());
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "요청을 처리하지 못했습니다.");
-    }
-
-    private boolean isConnectionFailure(Throwable exception) {
-        Throwable current = exception;
-        while (current != null) {
-            if (current instanceof SQLException sqlException
-                    && sqlException.getSQLState() != null
-                    && sqlException.getSQLState().startsWith("08")) {
-                return true;
-            }
-            if (current.getCause() == current) {
-                break;
-            }
-            current = current.getCause();
-        }
-        return false;
     }
 
     private ValidationError validationError(FieldError error) {

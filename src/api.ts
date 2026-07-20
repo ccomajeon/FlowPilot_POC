@@ -195,7 +195,7 @@ function retryDelay(response: Response | undefined, attempt: number): number {
   return 250 * (2 ** attempt) + Math.floor(Math.random() * 101);
 }
 
-function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+function waitForRetry(delayMs: number, signal?: AbortSignal | null): Promise<void> {
   if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(resolve, delayMs);

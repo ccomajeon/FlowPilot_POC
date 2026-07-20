@@ -55,6 +55,62 @@ describe("App", () => {
     expect(((update[1] as RequestInit).headers as Headers).get("X-CSRF-Token")).toBe("test-csrf");
   });
 
+  it("최근 수정순에서 변경된 항목을 서버 응답 시각에 맞춰 재정렬한다", async () => {
+    const recentTodo = {
+      ...openTodo,
+      id: "todo-2",
+      title: "최근 작업",
+      updatedAt: "2026-07-15T01:00:00Z"
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [recentTodo, openTodo] }))
+      .mockResolvedValueOnce(json({
+        ...openTodo,
+        status: "DONE",
+        version: 2,
+        updatedAt: "2026-07-15T02:00:00Z"
+      })));
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "계약 검토 완료로 변경" }));
+
+    await waitFor(() => {
+      const items = screen.getAllByRole("listitem");
+      expect(items[0]).toHaveTextContent("계약 검토");
+      expect(items[1]).toHaveTextContent("최근 작업");
+    });
+  });
+
+  it("최근 생성순에서는 수정 시각이 바뀌어도 생성 순서를 유지한다", async () => {
+    window.history.replaceState(null, "", "/todos?sort=createdAt%3Adesc");
+    const recentTodo = {
+      ...openTodo,
+      id: "todo-2",
+      title: "최근 생성 작업",
+      createdAt: "2026-07-15T01:00:00Z",
+      updatedAt: "2026-07-15T01:00:00Z"
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))
+      .mockResolvedValueOnce(json({ items: [recentTodo, openTodo] }))
+      .mockResolvedValueOnce(json({
+        ...openTodo,
+        status: "DONE",
+        version: 2,
+        updatedAt: "2026-07-15T02:00:00Z"
+      })));
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "계약 검토 완료로 변경" }));
+
+    await waitFor(() => {
+      const items = screen.getAllByRole("listitem");
+      expect(items[0]).toHaveTextContent("최근 생성 작업");
+      expect(items[1]).toHaveTextContent("계약 검토");
+    });
+  });
+
   it("생성 실패 후 입력을 유지하고 안전한 오류를 알린다", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({ authenticated: true, user: { id: "user-1", displayName: "사용자" }, csrfToken: "test-csrf" }))

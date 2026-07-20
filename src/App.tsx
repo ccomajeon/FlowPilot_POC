@@ -33,6 +33,11 @@ function matchesDueFilter(todo: Todo, due: DueFilter): boolean {
   return todo.dueDate > today;
 }
 
+function sortTodos(todos: Todo[], sort: TodoSort): Todo[] {
+  const field = sort === "createdAt:desc" ? "createdAt" : "updatedAt";
+  return [...todos].sort((left, right) => Date.parse(right[field]) - Date.parse(left[field]));
+}
+
 const DISCARD_MESSAGE = "저장하지 않은 변경사항이 있습니다. 변경사항을 폐기할까요?";
 
 function LoginPage({ error, onRetryLogout }: { error?: string; onRetryLogout?: () => void }) {
@@ -236,7 +241,7 @@ export function App() {
     setDirtyEditorIds((current) => {
       if (current.has(id) === dirty) return current;
       const next = new Set(current);
-      dirty ? next.add(id) : next.delete(id);
+      if (dirty) next.add(id); else next.delete(id);
       return next;
     });
   }, []);
@@ -268,7 +273,7 @@ export function App() {
 
   const loadTodos = useCallback(async (signal?: AbortSignal, cursor?: string, append = false) => {
     const current = ++requestNumber.current;
-    append ? setLoadingMore(true) : setLoading(true);
+    if (append) setLoadingMore(true); else setLoading(true);
     setListError("");
     try {
       const page = await api.todos(
@@ -295,7 +300,7 @@ export function App() {
       setTodos((currentTodos) => {
         const merged = new Map((append ? currentTodos : []).map((todo) => [todo.id, todo]));
         incoming.forEach((todo) => merged.set(todo.id, todo));
-        return [...merged.values()];
+        return sortTodos([...merged.values()], sort);
       });
       const limited = pageCount.current >= 20 || itemCount.current >= 500;
       setNextCursor(limited ? undefined : followingCursor);
@@ -307,7 +312,7 @@ export function App() {
       }
     } finally {
       if (current === requestNumber.current) {
-        append ? setLoadingMore(false) : setLoading(false);
+        if (append) setLoadingMore(false); else setLoading(false);
       }
     }
   }, [due, query, sort, status]);
@@ -334,7 +339,7 @@ export function App() {
   function markBusy(id: string, busy: boolean) {
     setBusyIds((current) => {
       const next = new Set(current);
-      busy ? next.add(id) : next.delete(id);
+      if (busy) next.add(id); else next.delete(id);
       return next;
     });
   }
@@ -349,7 +354,9 @@ export function App() {
   async function createTodo(input: TodoInput) {
     try {
       const created = await api.create(input);
-      if (matchesFilters(created)) setTodos((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      if (matchesFilters(created)) {
+        setTodos((current) => sortTodos([created, ...current.filter((item) => item.id !== created.id)], sort));
+      }
       setNotice(matchesFilters(created) ? "할 일을 추가했습니다." : "할 일을 추가했지만 현재 필터에는 표시되지 않습니다.");
     } catch (error) {
       setNotice(userMessage(error));
@@ -362,7 +369,7 @@ export function App() {
     try {
       const updated = await api.update(todo, input);
       setTodos((current) => matchesFilters(updated)
-        ? current.map((item) => item.id === todo.id ? updated : item)
+        ? sortTodos(current.map((item) => item.id === todo.id ? updated : item), sort)
         : current.filter((item) => item.id !== todo.id));
       setNotice("변경사항을 저장했습니다.");
     } catch (error) {

@@ -12,7 +12,7 @@ class BoardContentPolicyTest {
 
     @BeforeEach
     void setUp() {
-        policy = new BoardContentPolicy(new ObjectMapper());
+        policy = new BoardContentPolicy(new ObjectMapper(), new BoardProperties(512 * 1024, 100_000));
     }
 
     @Test

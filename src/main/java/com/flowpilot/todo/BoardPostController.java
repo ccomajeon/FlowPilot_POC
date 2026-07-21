@@ -63,7 +63,7 @@ class BoardPostController {
 }
 
 record BoardPostCreate(@NotBlank @Size(max = 200) String title, @NotNull EditorType editorType,
-                       @NotBlank @Size(max = 100_000) String content) {
+                       @NotBlank String content) {
     BoardPostCreate {
         if (title != null) title = title.trim();
     }
@@ -91,7 +91,7 @@ record BoardPostPatch(String title, String content) {
         if (node.has("content")) {
             if (!node.get("content").isTextual()) throw new BadRequest("content must be a string");
             content = node.get("content").textValue();
-            if (content.isBlank() || content.length() > 100_000) throw new BadRequest("content is invalid");
+            if (content.isBlank()) throw new BadRequest("content is invalid");
         }
         return new BoardPostPatch(title, content);
     }

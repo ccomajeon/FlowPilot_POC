@@ -52,7 +52,7 @@ FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS privilege;
 
 인증된 사용자는 `boards` scope로 활성 게시판과 공용 게시물을 조회·작성하고 자기 글만 수정·논리 삭제할 수 있습니다. 메뉴 생성·수정·활성화는 별도의 `boards.admin` scope가 필요하며, 이 권한은 Actuator의 `todos.admin`과 결합되지 않습니다. 게시판 관리자는 일반 게시물 기능도 필요하면 IdP에서 `boards`와 `boards.admin`을 함께 발급받아야 합니다.
 
-게시물은 `MARKDOWN` 또는 `RICH_TEXT` 원문으로 저장됩니다. 서버는 HTML을 생성하지 않으며 Markdown의 raw HTML·이미지·위험 URL과 rich-text의 미허용 노드·속성·URL을 거부합니다. Rich-text는 `schemaVersion: 1`인 구조화 JSON 문서를 문자열 필드로 전달합니다. 프런트엔드는 응답 원문을 신뢰 HTML로 직접 삽입하지 않고 승인된 안전 렌더러를 사용해야 합니다. 게시판 쓰기 요청은 512 KiB, 콘텐츠는 100,000자로 제한되며 첨부파일과 서버 측 외부 URL 조회는 지원하지 않습니다.
+게시물은 `MARKDOWN` 또는 `RICH_TEXT` 원문으로 저장됩니다. 서버는 HTML을 생성하지 않으며 Markdown의 raw HTML·이미지·위험 URL과 rich-text의 미허용 노드·속성·URL을 거부합니다. Rich-text는 `schemaVersion: 1`인 구조화 JSON 문서를 문자열 필드로 전달합니다. 프런트엔드는 응답 원문을 신뢰 HTML로 직접 삽입하지 않고 승인된 안전 렌더러를 사용해야 합니다. 게시판 쓰기 요청은 기본 512 KiB, 콘텐츠는 기본 100,000자로 제한되며 첨부파일과 서버 측 외부 URL 조회는 지원하지 않습니다. 한도는 검증된 `todo.boards.request-max-bytes`(1~524,288 bytes)와 `todo.boards.content-max-characters`(1~100,000) 설정으로 하향 조정할 수 있으며 승인된 보안 상한을 넘을 수 없습니다.
 
 주요 API는 다음과 같습니다.
 

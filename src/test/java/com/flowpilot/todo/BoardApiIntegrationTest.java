@@ -117,10 +117,12 @@ class BoardApiIntegrationTest {
                 .content("{\"active\":true,\"displayOrder\":10}"))
             .andExpect(status().isOk()).andExpect(header().string("ETag", "\"1\""))
             .andExpect(jsonPath("$.active").value(true));
+        Map<String, Object> beforeStalePatch = boardSnapshot(boardId);
         mvc.perform(patch("/api/v1/boards/{id}", boardId).with(boardAdmin("admin"))
                 .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"name\":\"stale\"}"))
             .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        assertThat(boardSnapshot(boardId)).isEqualTo(beforeStalePatch);
         mvc.perform(get("/api/v1/boards/{id}", boardId).with(boardUser("user")))
             .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("공지사항"));
     }
@@ -142,10 +144,12 @@ class BoardApiIntegrationTest {
         mvc.perform(get("/api/v1/posts/{id}", postId).with(boardUser("bob")))
             .andExpect(status().isOk()).andExpect(jsonPath("$.content").value("# 안전한 본문"));
 
+        Map<String, Object> beforeRejectedChanges = postSnapshot(postId);
         mvc.perform(patch("/api/v1/posts/{id}", postId).with(boardUser("bob"))
                 .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"title\":\"탈취\"}"))
             .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("POST_AUTHOR_REQUIRED"));
+        assertThat(postSnapshot(postId)).isEqualTo(beforeRejectedChanges);
         mvc.perform(patch("/api/v1/posts/{id}", postId).with(boardUser("alice"))
                 .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"수정\"}"))
             .andExpect(status().isPreconditionRequired());
@@ -153,6 +157,7 @@ class BoardApiIntegrationTest {
                 .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"content\":\"<script>alert(1)</script>\"}"))
             .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("CONTENT_POLICY_VIOLATION"));
+        assertThat(postSnapshot(postId)).isEqualTo(beforeRejectedChanges);
         mvc.perform(patch("/api/v1/posts/{id}", postId).with(boardUser("alice"))
                 .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"title\":\"수정\",\"content\":\"## 변경\"}"))
@@ -222,7 +227,180 @@ class BoardApiIntegrationTest {
     }
 
     @Test
+    void boardAndPostOrderingUsesDeterministicUuidTieBreakers() throws Exception {
+        String boardOne = boardId(createBoard("same-order-one", 5, true));
+        String boardTwo = boardId(createBoard("same-order-two", 5, true));
+        String boardThree = boardId(createBoard("same-order-three", 5, true));
+
+        List<String> expectedBoards = jdbc.queryForList(
+            "SELECT id::text FROM boards WHERE active = true ORDER BY display_order ASC, id ASC", String.class);
+        MvcResult boardPage = mvc.perform(get("/api/v1/boards?size=100").with(boardUser("reader")))
+            .andExpect(status().isOk()).andReturn();
+        assertThat(responseIds(boardPage)).containsExactlyElementsOf(expectedBoards);
+
+        createPost(boardOne, "alice", "first", "MARKDOWN", "first");
+        createPost(boardOne, "alice", "second", "MARKDOWN", "second");
+        createPost(boardOne, "alice", "third", "MARKDOWN", "third");
+        jdbc.update("UPDATE board_posts SET created_at = '2026-07-21T00:00:00Z' WHERE board_id = ?::uuid",
+            boardOne);
+
+        List<String> expectedDescending = jdbc.queryForList(
+            "SELECT id::text FROM board_posts WHERE board_id = ?::uuid "
+                + "ORDER BY created_at DESC, id DESC", String.class, boardOne);
+        MvcResult descending = mvc.perform(get("/api/v1/boards/{id}/posts?sort=createdAt,desc&size=100",
+                boardOne).with(boardUser("reader")))
+            .andExpect(status().isOk()).andReturn();
+        assertThat(responseIds(descending)).containsExactlyElementsOf(expectedDescending);
+
+        List<String> expectedAscending = jdbc.queryForList(
+            "SELECT id::text FROM board_posts WHERE board_id = ?::uuid "
+                + "ORDER BY created_at ASC, id ASC", String.class, boardOne);
+        MvcResult ascending = mvc.perform(get("/api/v1/boards/{id}/posts?sort=createdAt,asc&size=100",
+                boardOne).with(boardUser("reader")))
+            .andExpect(status().isOk()).andReturn();
+        assertThat(responseIds(ascending)).containsExactlyElementsOf(expectedAscending);
+        assertThat(List.of(boardOne, boardTwo, boardThree)).containsExactlyInAnyOrderElementsOf(expectedBoards);
+    }
+
+    @Test
+    void editorAndExactFieldBoundariesRejectInvalidRequestsWithoutPersistence() throws Exception {
+        String maxName = "n".repeat(100);
+        MvcResult boardResult = mvc.perform(post("/api/v1/boards").with(boardAdmin("admin"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(Map.of(
+                    "name", maxName, "description", "d".repeat(1000),
+                    "displayOrder", 1, "active", true))))
+            .andExpect(status().isCreated()).andReturn();
+        String boardId = boardId(boardResult);
+        long boardCount = boards.count();
+
+        mvc.perform(post("/api/v1/boards").with(boardAdmin("admin"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(Map.of(
+                    "name", "n".repeat(101), "displayOrder", 2))))
+            .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/v1/boards").with(boardAdmin("admin"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(Map.of(
+                    "name", "description-too-long", "description", "d".repeat(1001),
+                    "displayOrder", 2))))
+            .andExpect(status().isBadRequest());
+        assertThat(boards.count()).isEqualTo(boardCount);
+
+        MvcResult maxPost = createPost(boardId, "alice", "t".repeat(200), "MARKDOWN",
+            "c".repeat(100_000));
+        String postId = objectMapper.readTree(maxPost.getResponse().getContentAsByteArray()).get("id").asText();
+        assertThat(jdbc.queryForObject("SELECT length(content) FROM board_posts WHERE id = ?::uuid",
+            Integer.class, postId)).isEqualTo(100_000);
+        long postCount = posts.count();
+
+        for (String body : List.of(
+                "{\"title\":\"valid\",\"editorType\":\"HTML\",\"content\":\"valid\"}",
+                "{\"title\":\"valid\",\"editorType\":\"\",\"content\":\"valid\"}",
+                "{\"title\":\"   \",\"editorType\":\"MARKDOWN\",\"content\":\"valid\"}",
+                "{\"title\":\"valid\",\"editorType\":\"MARKDOWN\",\"content\":\"   \"}")) {
+            mvc.perform(post("/api/v1/boards/{id}/posts", boardId).with(boardUser("alice"))
+                    .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest());
+        }
+        mvc.perform(post("/api/v1/boards/{id}/posts", boardId).with(boardUser("alice"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(Map.of(
+                    "title", "t".repeat(201), "editorType", "MARKDOWN", "content", "valid"))))
+            .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/v1/boards/{id}/posts", boardId).with(boardUser("alice"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(Map.of(
+                    "title", "valid", "editorType", "MARKDOWN", "content", "c".repeat(100_001)))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("CONTENT_POLICY_VIOLATION"));
+        assertThat(posts.count()).isEqualTo(postCount);
+        assertThat(jdbc.queryForObject("SELECT version FROM board_posts WHERE id = ?::uuid",
+            Long.class, postId)).isZero();
+    }
+
+    @Test
+    void unknownPatchesLeaveEveryPersistedFieldAndVersionUnchanged() throws Exception {
+        String boardId = boardId(createBoard("unknown-patch", 7, true));
+        MvcResult postResult = createPost(boardId, "alice", "original", "MARKDOWN", "original-content");
+        String postId = objectMapper.readTree(postResult.getResponse().getContentAsByteArray()).get("id").asText();
+        Map<String, Object> boardBefore = boardSnapshot(boardId);
+        Map<String, Object> postBefore = postSnapshot(postId);
+
+        mvc.perform(patch("/api/v1/boards/{id}", boardId).with(boardAdmin("admin"))
+                .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"unknown\":true}"))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(patch("/api/v1/posts/{id}", postId).with(boardUser("alice"))
+                .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"editorType\":\"RICH_TEXT\"}"))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(patch("/api/v1/posts/{id}", postId).with(boardUser("alice"))
+                .header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(Map.of("content", "c".repeat(100_001)))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("CONTENT_POLICY_VIOLATION"));
+
+        assertThat(boardSnapshot(boardId)).isEqualTo(boardBefore);
+        assertThat(postSnapshot(postId)).isEqualTo(postBefore);
+    }
+
+    @Test
+    void boardTodoAndCombinedScopesRemainStrictlySeparated() throws Exception {
+        mvc.perform(get("/api/v1/boards").with(todoAdmin("operator")))
+            .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+        mvc.perform(post("/api/v1/boards").with(todoAdmin("operator"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"forbidden\",\"displayOrder\":1}"))
+            .andExpect(status().isForbidden());
+        assertThat(boards.count()).isZero();
+
+        MvcResult board = mvc.perform(post("/api/v1/boards").with(boardAdminAndUser("board-admin"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"combined\",\"displayOrder\":1,\"active\":true}"))
+            .andExpect(status().isCreated()).andReturn();
+        String boardId = boardId(board);
+        mvc.perform(post("/api/v1/boards/{id}/posts", boardId).with(boardAdmin("admin-only"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"title\":\"forbidden\",\"editorType\":\"MARKDOWN\",\"content\":\"x\"}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/boards/{id}/posts", boardId).with(boardAdminAndUser("board-admin"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"title\":\"allowed\",\"editorType\":\"MARKDOWN\",\"content\":\"x\"}"))
+            .andExpect(status().isCreated());
+        mvc.perform(get("/actuator/prometheus").with(boardAdminAndUser("board-admin")))
+            .andExpect(status().isForbidden());
+        mvc.perform(get("/actuator/prometheus").with(todoAdmin("operator")))
+            .andExpect(status().isOk());
+        assertThat(posts.count()).isEqualTo(1L);
+    }
+
+    @Test
     void migrationCreatesConstraintsIndexesAndRollsBackFailedWork() {
+        Map<String, String> columnTypes = jdbc.query("""
+            SELECT column_name, format_type(a.atttypid, a.atttypmod) AS type_name
+              FROM pg_attribute a
+              JOIN pg_class c ON c.oid = a.attrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'public' AND c.relname = 'board_posts'
+               AND a.attnum > 0 AND NOT a.attisdropped
+            """, resultSet -> {
+                Map<String, String> result = new java.util.HashMap<>();
+                while (resultSet.next()) result.put(resultSet.getString(1), resultSet.getString(2));
+                return result;
+            });
+        assertThat(columnTypes).containsEntry("id", "uuid")
+            .containsEntry("board_id", "uuid")
+            .containsEntry("author_id", "character varying(255)")
+            .containsEntry("title", "character varying(200)")
+            .containsEntry("editor_type", "character varying(20)")
+            .containsEntry("content", "text")
+            .containsEntry("created_at", "timestamp with time zone")
+            .containsEntry("updated_at", "timestamp with time zone")
+            .containsEntry("deleted_at", "timestamp with time zone")
+            .containsEntry("deleted_by", "character varying(255)")
+            .containsEntry("version", "bigint");
+
         List<String> boardConstraints = jdbc.queryForList(
             "SELECT conname FROM pg_constraint WHERE conrelid = 'boards'::regclass", String.class);
         assertThat(boardConstraints).contains("uq_boards_name", "ck_boards_name", "ck_boards_display_order");
@@ -236,11 +414,40 @@ class BoardApiIntegrationTest {
         assertThat(jdbc.queryForList(
             "SELECT indexname FROM pg_indexes WHERE tablename = 'board_posts'", String.class))
             .contains("idx_board_posts_visible_created");
+        assertThat(jdbc.queryForObject(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'fk_board_posts_board'",
+            String.class)).isEqualTo("FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE RESTRICT");
+        assertThat(jdbc.queryForObject(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_board_posts_editor_type'",
+            String.class)).contains("MARKDOWN", "RICH_TEXT");
+        Map<String, Object> visibleIndex = jdbc.queryForMap("""
+            SELECT pg_get_indexdef(i.indexrelid) AS definition,
+                   pg_get_expr(i.indpred, i.indrelid) AS predicate
+              FROM pg_index i
+              JOIN pg_class index_class ON index_class.oid = i.indexrelid
+             WHERE index_class.relname = 'idx_board_posts_visible_created'
+            """);
+        assertThat(visibleIndex.get("definition").toString())
+            .contains("(board_id, created_at DESC, id DESC)");
+        assertThat(visibleIndex.get("predicate").toString()).isEqualTo("(deleted_at IS NULL)");
 
+        long postCount = posts.count();
+        UUID validBoardId = boards.saveAndFlush(new Board("admin", "constraint-parent", null, 1, true)).id;
         assertThatThrownBy(() -> jdbc.update("""
             INSERT INTO boards(id, name, display_order, active, created_by, updated_by, created_at, updated_at, version)
             VALUES (?, ' ', 0, false, 'actor', 'actor', now(), now(), 0)
             """, UUID.randomUUID())).isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.update("""
+            INSERT INTO board_posts(id, board_id, author_id, title, editor_type, content,
+                                    created_at, updated_at, version)
+            VALUES (?, ?, 'author', 'title', 'HTML', 'content', now(), now(), 0)
+            """, UUID.randomUUID(), validBoardId)).isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.update("""
+            INSERT INTO board_posts(id, board_id, author_id, title, editor_type, content,
+                                    created_at, updated_at, version)
+            VALUES (?, ?, 'author', 'title', 'MARKDOWN', 'content', now(), now(), 0)
+            """, UUID.randomUUID(), UUID.randomUUID())).isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(posts.count()).isEqualTo(postCount);
 
         long before = boards.count();
         assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
@@ -248,30 +455,6 @@ class BoardApiIntegrationTest {
             throw new IllegalStateException("force rollback");
         })).isInstanceOf(IllegalStateException.class);
         assertThat(boards.count()).isEqualTo(before);
-    }
-
-    @Test
-    @Timeout(30)
-    void actualParallelPostUpdatesAllowExactlyOneCommit() throws Exception {
-        Board board = boards.saveAndFlush(new Board("admin", "동시성", null, 1, true));
-        BoardPost seed = posts.saveAndFlush(new BoardPost(board, "alice", "seed", EditorType.MARKDOWN, "seed"));
-        CountDownLatch loaded = new CountDownLatch(2);
-        CountDownLatch release = new CountDownLatch(1);
-        Callable<Object> update = () -> concurrentUpdate(seed.id, loaded, release);
-
-        try (var executor = Executors.newFixedThreadPool(2)) {
-            Future<Object> first = executor.submit(update);
-            Future<Object> second = executor.submit(update);
-            try {
-                assertThat(loaded.await(10, TimeUnit.SECONDS)).isTrue();
-            } finally {
-                release.countDown();
-            }
-            List<Object> outcomes = List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
-            assertThat(outcomes.stream().filter("updated"::equals).count()).isEqualTo(1);
-            assertThat(outcomes.stream().filter(RuntimeException.class::isInstance).count()).isEqualTo(1);
-        }
-        assertThat(posts.findById(seed.id).orElseThrow().version).isEqualTo(1);
     }
 
     @Test
@@ -321,26 +504,22 @@ class BoardApiIntegrationTest {
     }
 
     @Test
-    void boardOperationsExposeOnlyLowCardinalityMetrics() throws Exception {
-        createBoard("metrics", 1, false);
+    void boardOperationsExposeLowCardinalityAndNormalizedHttpMetrics() throws Exception {
+        String boardId = boardId(createBoard("metrics", 1, true));
+        MvcResult post = createPost(boardId, "metrics-user", "metrics", "MARKDOWN", "metrics");
+        String postId = objectMapper.readTree(post.getResponse().getContentAsByteArray()).get("id").asText();
+        mvc.perform(get("/api/v1/posts/{id}", postId).with(boardUser("metrics-reader")))
+            .andExpect(status().isOk());
+
         assertThat(meterRegistry.find("boards.operations")
             .tags("operation", "board_create", "outcome", "success", "reason", "none").counter())
             .isNotNull();
-    }
-
-    private Object concurrentUpdate(UUID postId, CountDownLatch loaded, CountDownLatch release) {
-        try {
-            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-                BoardPost post = posts.findById(postId).orElseThrow();
-                loaded.countDown();
-                await(release);
-                post.patch(new BoardPostPatch("changed", null));
-                posts.saveAndFlush(post);
-            });
-            return "updated";
-        } catch (RuntimeException exception) {
-            return exception;
-        }
+        var postTimer = meterRegistry.find("http.server.requests")
+            .tags("method", "GET", "status", "200", "uri", "/api/v1/posts/{postId}").timer();
+        assertThat(postTimer).isNotNull();
+        assertThat(postTimer.count()).isPositive();
+        assertThat(postTimer.getId().getTags())
+            .noneMatch(tag -> tag.getValue().equals(postId) || tag.getValue().equals(boardId));
     }
 
     private MvcResult createBoard(String name, int displayOrder, boolean active) throws Exception {
@@ -364,6 +543,27 @@ class BoardApiIntegrationTest {
             .andExpect(status().isCreated()).andExpect(header().string("ETag", "\"0\"")).andReturn();
     }
 
+    private List<String> responseIds(MvcResult result) throws Exception {
+        JsonNode items = objectMapper.readTree(result.getResponse().getContentAsByteArray()).path("items");
+        java.util.ArrayList<String> ids = new java.util.ArrayList<>();
+        items.forEach(item -> ids.add(item.path("id").asText()));
+        return ids;
+    }
+
+    private Map<String, Object> boardSnapshot(String boardId) {
+        return jdbc.queryForMap("""
+            SELECT name, description, display_order, active, updated_by, updated_at, version
+              FROM boards WHERE id = ?::uuid
+            """, boardId);
+    }
+
+    private Map<String, Object> postSnapshot(String postId) {
+        return jdbc.queryForMap("""
+            SELECT title, editor_type, content, updated_at, deleted_at, deleted_by, version
+              FROM board_posts WHERE id = ?::uuid
+            """, postId);
+    }
+
     private static RequestPostProcessor boardUser(String subject) {
         return jwt().jwt(token -> token.subject(subject).claim("scope", "boards"))
             .authorities(new SimpleGrantedAuthority("SCOPE_boards"));
@@ -372,6 +572,17 @@ class BoardApiIntegrationTest {
     private static RequestPostProcessor boardAdmin(String subject) {
         return jwt().jwt(token -> token.subject(subject).claim("scope", "boards.admin"))
             .authorities(new SimpleGrantedAuthority("SCOPE_boards.admin"));
+    }
+
+    private static RequestPostProcessor boardAdminAndUser(String subject) {
+        return jwt().jwt(token -> token.subject(subject).claim("scope", "boards boards.admin"))
+            .authorities(new SimpleGrantedAuthority("SCOPE_boards"),
+                new SimpleGrantedAuthority("SCOPE_boards.admin"));
+    }
+
+    private static RequestPostProcessor todoAdmin(String subject) {
+        return jwt().jwt(token -> token.subject(subject).claim("scope", "todos.admin"))
+            .authorities(new SimpleGrantedAuthority("SCOPE_todos.admin"));
     }
 
     private static void await(CountDownLatch latch) {

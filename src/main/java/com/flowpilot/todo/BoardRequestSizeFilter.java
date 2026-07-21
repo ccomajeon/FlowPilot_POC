@@ -22,13 +22,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 @Order(SecurityProperties.DEFAULT_FILTER_ORDER + 1)
 class BoardRequestSizeFilter extends OncePerRequestFilter {
-    static final int MAX_BYTES = 512 * 1024;
     private final SecurityProblemWriter problemWriter;
     private final BoardMetrics metrics;
+    private final int maxBytes;
 
-    BoardRequestSizeFilter(SecurityProblemWriter problemWriter, BoardMetrics metrics) {
+    BoardRequestSizeFilter(SecurityProblemWriter problemWriter, BoardMetrics metrics,
+            BoardProperties properties) {
         this.problemWriter = problemWriter;
         this.metrics = metrics;
+        this.maxBytes = properties.requestMaxBytes();
     }
 
     @Override
@@ -43,12 +45,12 @@ class BoardRequestSizeFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             jakarta.servlet.FilterChain chain) throws ServletException, IOException {
-        if (request.getContentLengthLong() > MAX_BYTES) {
+        if (request.getContentLengthLong() > maxBytes) {
             reject(request, response);
             return;
         }
-        byte[] body = request.getInputStream().readNBytes(MAX_BYTES + 1);
-        if (body.length > MAX_BYTES) {
+        byte[] body = request.getInputStream().readNBytes(maxBytes + 1);
+        if (body.length > maxBytes) {
             reject(request, response);
             return;
         }

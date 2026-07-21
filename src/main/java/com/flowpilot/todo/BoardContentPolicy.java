@@ -19,13 +19,15 @@ class BoardContentPolicy {
     private static final Set<String> INLINE_TYPES = Set.of("text", "hardBreak");
     private final Parser markdownParser = Parser.builder().build();
     private final ObjectMapper objectMapper;
+    private final int maxCharacters;
 
-    BoardContentPolicy(ObjectMapper objectMapper) {
+    BoardContentPolicy(ObjectMapper objectMapper, BoardProperties properties) {
         this.objectMapper = objectMapper;
+        this.maxCharacters = properties.contentMaxCharacters();
     }
 
     void validate(EditorType editorType, String content) {
-        if (editorType == null || content == null || content.isBlank() || content.length() > 100_000) {
+        if (editorType == null || content == null || content.isBlank() || content.length() > maxCharacters) {
             throw new ContentPolicyViolation();
         }
         if (editorType == EditorType.MARKDOWN) validateMarkdown(content);

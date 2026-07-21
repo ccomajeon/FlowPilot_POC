@@ -151,10 +151,13 @@ class TodoMissingScenariosIntegrationTest {
                 .migrate();
 
             jdbc.execute("REVOKE ALL PRIVILEGES ON TABLE " + schema + ".flyway_schema_history FROM todo_app");
-            jdbc.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " + schema + ".todos TO todo_app");
+            jdbc.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " + schema
+                + ".todos, " + schema + ".boards, " + schema + ".board_posts TO todo_app");
 
             for (String privilege : List.of("SELECT", "INSERT", "UPDATE", "DELETE")) {
                 assertThat(hasTablePrivilege("todo_app", schema + ".todos", privilege)).isTrue();
+                assertThat(hasTablePrivilege("todo_app", schema + ".boards", privilege)).isTrue();
+                assertThat(hasTablePrivilege("todo_app", schema + ".board_posts", privilege)).isTrue();
                 assertThat(hasTablePrivilege("todo_app", schema + ".flyway_schema_history", privilege)).isFalse();
             }
 
@@ -162,6 +165,12 @@ class TodoMissingScenariosIntegrationTest {
                     Statement statement = connection.createStatement()) {
                 statement.execute("SET search_path TO " + schema);
                 try (ResultSet result = statement.executeQuery("SELECT count(*) FROM todos")) {
+                    assertThat(result.next()).isTrue();
+                }
+                try (ResultSet result = statement.executeQuery("SELECT count(*) FROM boards")) {
+                    assertThat(result.next()).isTrue();
+                }
+                try (ResultSet result = statement.executeQuery("SELECT count(*) FROM board_posts")) {
                     assertThat(result.next()).isTrue();
                 }
                 assertPrivilegeDenied(statement, "ALTER TABLE todos ADD COLUMN forbidden_column text");

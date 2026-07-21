@@ -18,21 +18,24 @@ class SensitiveLoggingTest {
         String token = "Bearer qa-token-marker";
         String databaseUrl = "jdbc:postgresql://db.example/todos?password=qa-password-marker";
         String todoBody = "qa-private-description-marker";
+        String boardTitle = "qa-private-board-title-marker";
+        String boardBody = "qa-private-board-body-marker";
         MDC.put(CorrelationIdFilter.MDC_KEY, "safe-correlation");
         ProblemDetail problem;
         try {
             problem = new ApiExceptionHandler().databaseUnavailable(
                 new DataAccessResourceFailureException(
-                    "Authorization=" + token + "; url=" + databaseUrl + "; body=" + todoBody));
+                    "Authorization=" + token + "; url=" + databaseUrl + "; body=" + todoBody
+                        + "; title=" + boardTitle + "; content=" + boardBody));
         } finally {
             MDC.remove(CorrelationIdFilter.MDC_KEY);
         }
 
         assertThat(problem.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE.value());
-        assertThat(problem.getDetail()).doesNotContain(token, databaseUrl, todoBody);
+        assertThat(problem.getDetail()).doesNotContain(token, databaseUrl, todoBody, boardTitle, boardBody);
         assertThat(output.getAll())
             .contains("DataAccessResourceFailureException")
             .contains("safe-correlation")
-            .doesNotContain(token, databaseUrl, todoBody, "qa-password-marker");
+            .doesNotContain(token, databaseUrl, todoBody, boardTitle, boardBody, "qa-password-marker");
     }
 }

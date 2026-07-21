@@ -7,7 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.http.*;
@@ -30,6 +32,29 @@ class ApiExceptionHandler {
 
     @ExceptionHandler(TodoNotFound.class)
     ProblemDetail notFound() { return problem(HttpStatus.NOT_FOUND, "TODO_NOT_FOUND", "할 일을 찾을 수 없습니다."); }
+
+    @ExceptionHandler(BoardNotFound.class)
+    ProblemDetail boardNotFound() { return problem(HttpStatus.NOT_FOUND, "BOARD_NOT_FOUND", "게시판을 찾을 수 없습니다."); }
+
+    @ExceptionHandler(BoardPostNotFound.class)
+    ProblemDetail boardPostNotFound() { return problem(HttpStatus.NOT_FOUND, "POST_NOT_FOUND", "게시물을 찾을 수 없습니다."); }
+
+    @ExceptionHandler(PostAuthorRequired.class)
+    ProblemDetail postAuthorRequired() { return problem(HttpStatus.FORBIDDEN, "POST_AUTHOR_REQUIRED", "작성자만 변경할 수 있습니다."); }
+
+    @ExceptionHandler(BoardAccessDenied.class)
+    ProblemDetail boardAccessDenied() { return problem(HttpStatus.FORBIDDEN, "ACCESS_DENIED", "요청 권한이 없습니다."); }
+
+    @ExceptionHandler(BoardInactive.class)
+    ProblemDetail boardInactive() { return problem(HttpStatus.CONFLICT, "BOARD_INACTIVE", "비활성 게시판에는 작성할 수 없습니다."); }
+
+    @ExceptionHandler(BoardNameConflict.class)
+    ProblemDetail boardNameConflict() { return problem(HttpStatus.CONFLICT, "BOARD_NAME_CONFLICT", "같은 이름의 게시판이 있습니다."); }
+
+    @ExceptionHandler(ContentPolicyViolation.class)
+    ProblemDetail contentPolicyViolation() {
+        return problem(HttpStatus.BAD_REQUEST, "CONTENT_POLICY_VIOLATION", "허용되지 않은 콘텐츠입니다.");
+    }
 
     @ExceptionHandler({VersionConflict.class, OptimisticLockException.class, OptimisticLockingFailureException.class})
     ProblemDetail conflict() { return problem(HttpStatus.CONFLICT, "VERSION_CONFLICT", "다른 요청이 먼저 변경했습니다."); }
@@ -70,7 +95,8 @@ class ApiExceptionHandler {
     }
 
     @ExceptionHandler({DataAccessResourceFailureException.class, TransientDataAccessResourceException.class,
-        QueryTimeoutException.class, CannotCreateTransactionException.class})
+        QueryTimeoutException.class, CannotCreateTransactionException.class, CannotAcquireLockException.class,
+        PessimisticLockingFailureException.class})
     ProblemDetail databaseUnavailable(Exception exception) {
         log.error("Database request failed; correlationId={}, exceptionType={}",
             MDC.get(CorrelationIdFilter.MDC_KEY), exception.getClass().getName());

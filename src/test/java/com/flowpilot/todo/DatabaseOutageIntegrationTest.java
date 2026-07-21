@@ -67,5 +67,11 @@ class DatabaseOutageIntegrationTest {
             .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
             .andExpect(jsonPath("$.code").value("DATABASE_UNAVAILABLE"))
             .andExpect(jsonPath("$.detail").value("서비스를 일시적으로 사용할 수 없습니다."));
+        mvc.perform(get("/api/v1/boards").with(jwt()
+                .jwt(token -> token.subject("reader").claim("scope", "boards"))
+                .authorities(new SimpleGrantedAuthority("SCOPE_boards"))))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(jsonPath("$.code").value("DATABASE_UNAVAILABLE"));
     }
 }

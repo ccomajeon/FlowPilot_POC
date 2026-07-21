@@ -40,6 +40,12 @@ class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/boards").hasAuthority("SCOPE_boards.admin")
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/boards/*").hasAuthority("SCOPE_boards.admin")
+                .requestMatchers("/api/v1/boards/*/posts").hasAuthority("SCOPE_boards")
+                .requestMatchers("/api/v1/boards", "/api/v1/boards/**")
+                    .hasAnyAuthority("SCOPE_boards", "SCOPE_boards.admin")
+                .requestMatchers("/api/v1/posts", "/api/v1/posts/**").hasAuthority("SCOPE_boards")
                 .requestMatchers("/api/v1/todos", "/api/v1/todos/**").hasAuthority("SCOPE_todos")
                 .requestMatchers("/actuator/**").hasAuthority("SCOPE_todos.admin")
                 .anyRequest().authenticated())

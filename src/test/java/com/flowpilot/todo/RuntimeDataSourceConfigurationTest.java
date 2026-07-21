@@ -23,5 +23,7 @@ class RuntimeDataSourceConfigurationTest {
             .isEqualTo(true);
         assertThat(source.getProperty("management.endpoints.web.exposure.include"))
             .isEqualTo("health,info,metrics,prometheus");
+        assertThat(source.getProperty("todo.boards.request-max-bytes")).isEqualTo(524288);
+        assertThat(source.getProperty("todo.boards.content-max-characters")).isEqualTo(100000);
     }
 }

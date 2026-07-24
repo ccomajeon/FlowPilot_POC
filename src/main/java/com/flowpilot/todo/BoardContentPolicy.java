@@ -1,8 +1,10 @@
 package com.flowpilot.todo;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import java.net.URI;
 import java.util.Locale;
 import java.util.Set;
@@ -18,11 +20,13 @@ class BoardContentPolicy {
         "paragraph", "heading", "bulletList", "orderedList");
     private static final Set<String> INLINE_TYPES = Set.of("text", "hardBreak");
     private final Parser markdownParser = Parser.builder().build();
-    private final ObjectMapper objectMapper;
+    private final ObjectReader richTextReader;
     private final int maxCharacters;
 
     BoardContentPolicy(ObjectMapper objectMapper, BoardProperties properties) {
-        this.objectMapper = objectMapper;
+        this.richTextReader = objectMapper.reader()
+            .with(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY)
+            .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
         this.maxCharacters = properties.contentMaxCharacters();
     }
 
@@ -53,13 +57,15 @@ class BoardContentPolicy {
     private void validateRichText(String content) {
         final JsonNode root;
         try {
-            root = objectMapper.readTree(content);
+            root = richTextReader.readTree(content);
         } catch (JsonProcessingException exception) {
             throw new ContentPolicyViolation();
         }
         Counter counter = new Counter();
         requireObject(root, Set.of("schemaVersion", "type", "content"));
-        if (!root.path("schemaVersion").canConvertToInt() || root.path("schemaVersion").intValue() != 1
+        JsonNode schemaVersion = root.get("schemaVersion");
+        if (schemaVersion == null || !schemaVersion.isIntegralNumber()
+                || !schemaVersion.canConvertToInt() || schemaVersion.intValue() != 1
                 || !"doc".equals(text(root, "type"))) {
             throw new ContentPolicyViolation();
         }

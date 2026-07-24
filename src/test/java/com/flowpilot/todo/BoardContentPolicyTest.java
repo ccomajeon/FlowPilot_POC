@@ -47,9 +47,21 @@ class BoardContentPolicyTest {
     void rejectsUnknownRichTextNodesAttributesAndDangerousUrls() {
         for (String unsafe : new String[] {
                 "{\"schemaVersion\":2,\"type\":\"doc\",\"content\":[]}",
+                "{\"schemaVersion\":1.5,\"type\":\"doc\",\"content\":[]}",
                 "{\"schemaVersion\":1,\"type\":\"doc\",\"content\":[{\"type\":\"script\"}]}",
                 "{\"schemaVersion\":1,\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"onclick\":\"x\",\"content\":[]}]}",
                 "{\"schemaVersion\":1,\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"x\",\"marks\":[{\"type\":\"link\",\"attrs\":{\"href\":\"javascript:alert(1)\"}}]}]}]}"}) {
+            assertThatThrownBy(() -> policy.validate(EditorType.RICH_TEXT, unsafe))
+                .isInstanceOf(ContentPolicyViolation.class);
+        }
+    }
+
+    @Test
+    void rejectsAmbiguousRichTextJsonDocuments() {
+        for (String unsafe : new String[] {
+                "{\"schemaVersion\":2,\"schemaVersion\":1,\"type\":\"doc\",\"content\":[]}",
+                "{\"schemaVersion\":1,\"type\":\"doc\",\"content\":[]}"
+                    + "{\"schemaVersion\":1,\"type\":\"doc\",\"content\":[]}"}) {
             assertThatThrownBy(() -> policy.validate(EditorType.RICH_TEXT, unsafe))
                 .isInstanceOf(ContentPolicyViolation.class);
         }
